@@ -1,0 +1,294 @@
+mod admin;
+mod auth_routes;
+mod channels;
+mod charts;
+mod public;
+mod settings;
+mod views;
+
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use askama::Template;
+use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
+use axum::http::request::Parts;
+use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use axum_extra::extract::CookieJar;
+use axum_extra::extract::cookie::{Cookie, SameSite};
+use rust_embed::RustEmbed;
+use tower_http::compression::CompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+use crate::app::Ctx;
+use crate::auth::oidc::Oidc;
+use crate::auth::ratelimit::LoginLimiter;
+use crate::monitor::scheduler::Scheduler;
+use crate::store;
+
+pub const SESSION_COOKIE: &str = "anpi_session";
+pub const ASSET_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone)]
+pub struct AppState {
+    pub ctx: Arc<Ctx>,
+    pub scheduler: Arc<Scheduler>,
+    pub oidc: Option<Arc<Oidc>>,
+    pub limiter: Arc<LoginLimiter>,
+    /// One-time code printed to the log; required to create the first account.
+    pub setup_code: Arc<Mutex<Option<String>>>,
+}
+
+impl AppState {
+    pub fn new(ctx: Arc<Ctx>, scheduler: Arc<Scheduler>) -> Self {
+        let oidc = ctx
+            .config
+            .oidc
+            .clone()
+            .zip(ctx.config.oidc_redirect_url())
+            .map(|(cfg, redirect)| Arc::new(Oidc::new(cfg, redirect)));
+        Self {
+            ctx,
+            scheduler,
+            oidc,
+            limiter: Arc::new(LoginLimiter::new(10, Duration::from_secs(15 * 60))),
+            setup_code: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn db(&self) -> &crate::db::Db {
+        &self.ctx.db
+    }
+
+    pub fn session_cookie(&self, token: String) -> Cookie<'static> {
+        Cookie::build((SESSION_COOKIE, token))
+            .path("/")
+            .http_only(true)
+            .same_site(SameSite::Lax)
+            .secure(self.ctx.config.secure_cookies())
+            .max_age(time::Duration::milliseconds(store::users::SESSION_TTL_MS))
+            .build()
+    }
+}
+
+#[derive(Debug)]
+pub struct AppError(pub StatusCode, pub String);
+
+impl AppError {
+    pub fn not_found() -> Self {
+        Self(StatusCode::NOT_FOUND, "Not found".into())
+    }
+
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self(StatusCode::BAD_REQUEST, msg.into())
+    }
+
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self(StatusCode::FORBIDDEN, msg.into())
+    }
+}
+
+impl<E: std::fmt::Display> From<E> for AppError {
+    fn from(e: E) -> Self {
+        tracing::error!(error = %e, "request failed");
+        Self(StatusCode::INTERNAL_SERVER_ERROR, "Internal error".into())
+    }
+}
+
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorPage {
+    layout: views::Layout,
+    code: u16,
+    message: String,
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let page = ErrorPage { layout: views::Layout::bare("Error"), code: self.0.as_u16(), message: self.1.clone() };
+        match page.render() {
+            Ok(html) => (self.0, Html(html)).into_response(),
+            Err(_) => (self.0, self.1).into_response(),
+        }
+    }
+}
+
+pub type AppResult<T> = Result<T, AppError>;
+
+pub fn render<T: Template>(t: &T) -> AppResult<Html<String>> {
+    Ok(Html(t.render()?))
+}
+
+pub struct CurrentUser {
+    pub id: i64,
+    pub username: String,
+    pub csrf: String,
+    pub id_token: Option<String>,
+    pub token: String,
+}
+
+impl CurrentUser {
+    pub fn check_csrf(&self, token: &str) -> AppResult<()> {
+        let a = self.csrf.as_bytes();
+        let b = token.as_bytes();
+        let same = a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
+        if same { Ok(()) } else { Err(AppError::forbidden("Invalid or expired form token. Reload the page and try again.")) }
+    }
+}
+
+impl FromRequestParts<AppState> for CurrentUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let jar = CookieJar::from_headers(&parts.headers);
+        if let Some(c) = jar.get(SESSION_COOKIE)
+            && let Ok(Some(s)) = store::users::session(state.db(), c.value()).await
+        {
+            return Ok(Self { id: s.user_id, username: s.username, csrf: s.csrf, id_token: s.id_token, token: c.value().to_string() });
+        }
+        let next = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/admin");
+        Err(Redirect::to(&format!("/login?next={}", urlencoding::encode(next))).into_response())
+    }
+}
+
+pub struct ClientIp(pub IpAddr);
+
+impl FromRequestParts<AppState> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        if state.ctx.config.trust_proxy
+            && let Some(ip) = parts
+                .headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(',').next())
+                .and_then(|v| v.trim().parse().ok())
+        {
+            return Ok(Self(ip));
+        }
+        let ip = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        Ok(Self(ip))
+    }
+}
+
+/// Only allows relative paths, so `next` cannot redirect to another site.
+pub fn safe_next(next: Option<&str>) -> String {
+    match next {
+        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.starts_with("/\\") => n.to_string(),
+        _ => "/admin".to_string(),
+    }
+}
+
+#[derive(RustEmbed)]
+#[folder = "static/"]
+struct Assets;
+
+async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
+    match Assets::get(&path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            (
+                [
+                    (header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
+                    (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=604800")),
+                ],
+                file.data,
+            )
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Rejects cross-site form posts; push endpoints are exempt because cron jobs call them.
+async fn origin_guard(req: Request, next: Next) -> Response {
+    if req.method() == Method::POST && !req.uri().path().starts_with("/api/push/") {
+        let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or_default();
+        if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
+            let origin_host = url::Url::parse(origin).ok().and_then(|u| {
+                u.host_str().map(|h| match u.port() {
+                    Some(p) => format!("{h}:{p}"),
+                    None => h.to_string(),
+                })
+            });
+            if origin_host.as_deref() != Some(host) {
+                return (StatusCode::FORBIDDEN, "cross-origin request blocked").into_response();
+            }
+        }
+    }
+    next.run(req).await
+}
+
+async fn healthz(State(st): State<AppState>) -> impl IntoResponse {
+    match sqlx::query("SELECT 1").execute(st.db()).await {
+        Ok(_) => (StatusCode::OK, "ok"),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "database unavailable"),
+    }
+}
+
+pub fn router(state: AppState) -> Router {
+    let csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; \
+               frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+    Router::new()
+        .route("/", get(public::status_page))
+        .route("/api/status.json", get(public::status_json))
+        .route("/api/push/{token}", get(public::push).post(public::push))
+        .route("/events/public", get(public::public_events))
+        .route("/healthz", get(healthz))
+        .route("/static/{*path}", get(static_asset))
+        .route("/login", get(auth_routes::login_page).post(auth_routes::login))
+        .route("/setup", get(auth_routes::setup_page).post(auth_routes::setup))
+        .route("/logout", post(auth_routes::logout))
+        .route("/auth/oidc/login", get(auth_routes::oidc_login))
+        .route("/auth/oidc/callback", get(auth_routes::oidc_callback))
+        .route("/admin", get(admin::dashboard))
+        .route("/admin/events", get(admin::events))
+        .route("/admin/monitors/new", get(admin::new_monitor))
+        .route("/admin/monitors", post(admin::create_monitor))
+        .route("/admin/monitors/{id}", get(admin::monitor_detail).post(admin::update_monitor))
+        .route("/admin/monitors/{id}/edit", get(admin::edit_monitor))
+        .route("/admin/monitors/{id}/toggle", post(admin::toggle_monitor))
+        .route("/admin/monitors/{id}/delete", post(admin::delete_monitor))
+        .route("/admin/notifications", get(channels::list).post(channels::create))
+        .route("/admin/notifications/new", get(channels::new_form))
+        .route("/admin/notifications/{id}", get(channels::edit_form).post(channels::update))
+        .route("/admin/notifications/{id}/delete", post(channels::delete))
+        .route("/admin/notifications/{id}/test", post(channels::test))
+        .route("/admin/maintenance", get(settings::maintenance_page).post(settings::create_maintenance))
+        .route("/admin/maintenance/{id}/delete", post(settings::delete_maintenance))
+        .route("/admin/settings", get(settings::settings_page).post(settings::save_settings))
+        .route("/admin/users", post(settings::create_user))
+        .route("/admin/users/{id}/delete", post(settings::delete_user))
+        .route("/admin/account/password", post(settings::change_password))
+        .route(
+            "/admin/import",
+            get(settings::import_page).post(settings::import).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
+        )
+        .fallback(|| async { AppError::not_found() })
+        .layer(middleware::from_fn(origin_guard))
+        .layer(CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
+        .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("same-origin")))
+        .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn next_parameter_cannot_leave_the_site() {
+        assert_eq!(safe_next(Some("/admin/monitors/3")), "/admin/monitors/3");
+        assert_eq!(safe_next(Some("//evil.com")), "/admin");
+        assert_eq!(safe_next(Some("/\\evil.com")), "/admin");
+        assert_eq!(safe_next(Some("https://evil.com")), "/admin");
+        assert_eq!(safe_next(None), "/admin");
+    }
+}

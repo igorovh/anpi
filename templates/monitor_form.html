@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <p class="crumbs"><a href="/admin">monitors</a> /</p>
+    <h1>{{ layout.title }}</h1>
+  </div>
+</section>
+
+{% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
+
+<form method="post" action="{% if let Some(id) = id %}/admin/monitors/{{ id }}{% else %}/admin/monitors{% endif %}" class="form fade" data-kind-form>
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+
+  <fieldset>
+    <legend>Basics</legend>
+    <div class="row">
+      <label>Type
+        <select name="kind" data-kind-select>
+          {% for (value, label) in kinds %}<option value="{{ value }}"{% if f.is_kind(value) %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="grow">Name<input name="name" value="{{ f.name }}" required maxlength="100"></label>
+    </div>
+    <label data-kinds="http">URL<input name="url" value="{{ f.url }}" placeholder="https://example.com/health" spellcheck="false"></label>
+    <div class="row" data-kinds="tcp ping dns">
+      <label class="grow"><span data-kinds="tcp ping">Host</span><span data-kinds="dns">Domain name</span><input name="host" value="{{ f.host }}" placeholder="example.com" spellcheck="false"></label>
+      <label data-kinds="tcp">Port<input name="port" value="{{ f.port }}" inputmode="numeric" size="6"></label>
+    </div>
+    <div class="row" data-kinds="http tcp ping">
+      <label>IP version
+        <select name="ip_family">
+          <option value="auto"{% if f.ip_family == "auto" %} selected{% endif %}>Auto (IPv6, then IPv4)</option>
+          <option value="v4"{% if f.ip_family == "v4" %} selected{% endif %}>IPv4 only</option>
+          <option value="v6"{% if f.ip_family == "v6" %} selected{% endif %}>IPv6 only</option>
+        </select>
+      </label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Timing</legend>
+    <div class="row">
+      <label><span data-kinds="http tcp ping dns">Check every (s)</span><span data-kinds="push">Expect a push every (s)</span><input name="interval_s" value="{{ f.interval_s }}" inputmode="numeric" size="7"></label>
+      <label data-kinds="http tcp ping dns">Retry every (s)<span class="hint">while failing</span><input name="retry_interval_s" value="{{ f.retry_interval_s }}" inputmode="numeric" size="7"></label>
+      <label data-kinds="http tcp ping dns">Timeout (s)<input name="timeout_s" value="{{ f.timeout_s }}" inputmode="numeric" size="5"></label>
+      <label>Down after<span class="hint">failures in a row</span><input name="failure_threshold" value="{{ f.failure_threshold }}" inputmode="numeric" size="4"></label>
+    </div>
+  </fieldset>
+
+  <fieldset data-kinds="http">
+    <legend>HTTP</legend>
+    <div class="row">
+      <label>Method
+        <select name="method">
+          {% for meth in ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] %}<option{% if f.is_method(meth) %} selected{% endif %}>{{ meth }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="grow">Accepted status codes<span class="hint">e.g. 200-299, 301, 4xx</span><input name="expected_status" value="{{ f.expected_status }}"></label>
+    </div>
+    <label>Headers<span class="hint">one per line, Name: value</span><textarea name="headers" rows="3" spellcheck="false">{{ f.headers }}</textarea></label>
+    <label>Body<textarea name="body" rows="3" spellcheck="false">{{ f.body }}</textarea></label>
+    <div class="row checks-row">
+      <label class="check"><input type="checkbox" name="follow_redirects"{% if f.follow_redirects.is_some() %} checked{% endif %}> Follow redirects</label>
+      <label class="check"><input type="checkbox" name="ignore_tls"{% if f.ignore_tls.is_some() %} checked{% endif %}> Ignore TLS errors</label>
+    </div>
+    <div class="row">
+      <label>Response check
+        <select name="content_kind">
+          <option value="none"{% if f.content_kind == "none" %} selected{% endif %}>Status code only</option>
+          <option value="contains"{% if f.content_kind == "contains" %} selected{% endif %}>Body contains</option>
+          <option value="not_contains"{% if f.content_kind == "not_contains" %} selected{% endif %}>Body does not contain</option>
+          <option value="regex"{% if f.content_kind == "regex" %} selected{% endif %}>Body matches regex</option>
+          <option value="json_path"{% if f.content_kind == "json_path" %} selected{% endif %}>JSON field (JSONPath)</option>
+        </select>
+      </label>
+      <label class="grow">Keyword / pattern / path<span class="hint">e.g. $.status</span><input name="content_value" value="{{ f.content_value }}" spellcheck="false"></label>
+      <label>Expected value<span class="hint">JSONPath only; empty = must exist</span><input name="content_expected" value="{{ f.content_expected }}"></label>
+    </div>
+    <label class="narrow">Warn before certificate expiry (days)<span class="hint">0 disables</span><input name="ssl_warn_days" value="{{ f.ssl_warn_days }}" inputmode="numeric" size="4"></label>
+  </fieldset>
+
+  <fieldset data-kinds="dns">
+    <legend>DNS</legend>
+    <div class="row">
+      <label>Record type
+        <select name="dns_record_type">
+          {% for t in record_types %}<option{% if f.is_record(t) %} selected{% endif %}>{{ t }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="grow">Resolver<span class="hint">empty = system resolver</span><input name="dns_server" value="{{ f.dns_server }}" placeholder="1.1.1.1"></label>
+      <label class="grow">Expected value<span class="hint">optional</span><input name="dns_expected" value="{{ f.dns_expected }}"></label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Notifications</legend>
+    {% if channels.is_empty() %}
+    <p class="muted">No channels yet. <a href="/admin/notifications/new">Add one</a> to get alerts.</p>
+    {% else %}
+    <div class="row checks-row">
+      {% for c in channels %}<label class="check"><input type="checkbox" name="channels" value="{{ c.id }}"{% if f.checked(c.id) %} checked{% endif %}> {{ c.name }} <span class="muted">{{ c.kind }}</span></label>{% endfor %}
+    </div>
+    {% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Visibility</legend>
+    <div class="row checks-row">
+      <label class="check"><input type="checkbox" name="active"{% if f.active.is_some() %} checked{% endif %}> Active</label>
+      <label class="check"><input type="checkbox" name="public"{% if f.public.is_some() %} checked{% endif %}> Show on the public status page</label>
+    </div>
+  </fieldset>
+
+  <div class="form-actions">
+    <button type="submit" class="btn primary">Save</button>
+    <a class="btn" href="{% if let Some(id) = id %}/admin/monitors/{{ id }}{% else %}/admin{% endif %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

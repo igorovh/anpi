@@ -1,0 +1,23 @@
+services:
+  anpi:
+    build: .
+    image: anpi:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - anpi-data:/data
+    environment:
+      ANPI_BASE_URL: "https://status.example.com"
+      # Behind a reverse proxy, trust X-Forwarded-For for login rate limiting.
+      ANPI_TRUST_PROXY: "true"
+      # Uncomment to sign in with Keycloak only (local accounts are disabled).
+      # ANPI_OIDC_ISSUER: "https://auth.example.com/realms/main"
+      # ANPI_OIDC_CLIENT_ID: "anpi"
+      # ANPI_OIDC_CLIENT_SECRET: "change-me"
+      # ANPI_OIDC_REQUIRED_ROLE: "monitoring"
+    # IPv6 monitors need IPv6 inside the container: enable it in the Docker daemon
+    # or use `network_mode: host`.
+
+volumes:
+  anpi-data:

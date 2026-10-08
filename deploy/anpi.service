@@ -1,0 +1,35 @@
+[Unit]
+Description=anpi uptime monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anpi
+Group=anpi
+EnvironmentFile=-/etc/anpi/anpi.env
+Environment=ANPI_DATA_DIR=/var/lib/anpi
+Environment=ANPI_BIND=127.0.0.1:3000
+ExecStart=/usr/local/bin/anpi
+Restart=on-failure
+RestartSec=5
+
+StateDirectory=anpi
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Ping monitors need ICMP sockets; drop this line if you do not use them.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

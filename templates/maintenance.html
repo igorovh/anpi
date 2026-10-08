@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <h1>Maintenance</h1>
+    <p class="muted">During a window, checks keep running but failures are shown as maintenance and no alerts are sent.</p>
+  </div>
+</section>
+{% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
+
+<form method="post" action="/admin/maintenance" class="form card fade">
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <input type="hidden" name="tz_offset" value="0" data-tz-offset>
+  <h3>Schedule a window</h3>
+  <div class="row">
+    <label class="grow">Title<input name="title" required placeholder="Database upgrade"></label>
+    <label>Starts<input type="datetime-local" name="starts_at" required></label>
+    <label>Ends<input type="datetime-local" name="ends_at" required></label>
+  </div>
+  <label class="check"><input type="checkbox" name="all_monitors" data-toggle-target="monitor-picker"> All monitors</label>
+  <div class="row checks-row" id="monitor-picker">
+    {% for (mid, name) in monitors %}<label class="check"><input type="checkbox" name="monitors" value="{{ mid }}"> {{ name }}</label>{% endfor %}
+  </div>
+  <div class="form-actions"><button type="submit" class="btn primary">Schedule</button></div>
+</form>
+
+<section class="list fade">
+  {% for r in rows %}
+  <div class="list-row">
+    <span class="tag m-{{ r.state }}">{{ r.state }}</span>
+    <span class="grow"><strong>{{ r.title }}</strong><br><span class="muted">{{ r.starts }} → {{ r.ends }} · {{ r.scope }}</span></span>
+    <form method="post" action="/admin/maintenance/{{ r.id }}/delete" class="inline" data-confirm="Delete this maintenance window?">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Delete</button>
+    </form>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

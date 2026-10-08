@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block body_attrs %} data-events="/events/public" class="public"{% endblock %}
+{% block content %}
+<section class="hero fade">
+  <h1>{{ layout.title }}</h1>
+  {% if !description.is_empty() %}<p class="lede">{{ description }}</p>{% endif %}
+  <div class="overall {{ overall_class }}" id="overall">
+    <span class="dot"></span><span class="overall-label">{{ overall_label }}</span>
+  </div>
+</section>
+
+{% if monitors.is_empty() %}
+<p class="empty fade">Nothing is published here yet.</p>
+{% else %}
+<section class="services fade">
+  {% for m in monitors %}
+  <article class="service" data-monitor="{{ m.id }}">
+    <div class="service-head">
+      <span class="status {{ m.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ m.status_label }}</span></span>
+      <h2>{{ m.name }}</h2>
+      <span class="uptime" title="Uptime in the last 24 hours / 30 days">{{ m.uptime_24h }} <span class="muted">· 30d {{ m.uptime_30d }}</span></span>
+    </div>
+    <div class="days" aria-label="Daily uptime, last 30 days">
+      {% for b in m.bars %}<span class="day {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}
+    </div>
+    <div class="days-legend"><span>30 days ago</span><span>today</span></div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="incidents fade">
+  <h3>Recent incidents</h3>
+  {% if incidents.is_empty() %}
+  <p class="muted">No incidents in the last 14 days.</p>
+  {% else %}
+  <ul class="timeline">
+    {% for i in incidents %}
+    <li>
+      <span class="when">{{ i.started }}</span>
+      <span class="what"><strong>{{ i.monitor }}</strong> {% if i.ongoing %}has been down for {{ i.duration }} <span class="tag s-down">ongoing</span>{% else %}was down for {{ i.duration }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endblock %}
+{% block footer %}
+<span>powered by <a href="https://github.com/igorovh">anpi</a></span>
+<a href="{% if signed_in %}/admin{% else %}/login{% endif %}">{% if signed_in %}dashboard{% else %}sign in{% endif %}</a>
+{% endblock %}

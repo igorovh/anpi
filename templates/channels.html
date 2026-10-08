@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <h1>Notifications</h1>
+    <p class="muted">Channels receive an alert when a monitor goes down, comes back, or its certificate is about to expire.</p>
+  </div>
+  <div class="actions"><a class="btn primary" href="/admin/notifications/new">+ New channel</a></div>
+</section>
+{% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
+{% if rows.is_empty() %}
+<p class="empty fade">No channels yet.</p>
+{% else %}
+<section class="list fade">
+  {% for r in rows %}
+  <div class="list-row">
+    <span class="grow"><a href="/admin/notifications/{{ r.id }}">{{ r.name }}</a> <span class="muted">{{ r.kind_label }}</span>
+      {% if r.is_default %}<span class="tag" title="Pre-selected for new monitors">default</span>{% endif %}
+      {% if !r.active %}<span class="tag">disabled</span>{% endif %}</span>
+    <form method="post" action="/admin/notifications/{{ r.id }}/test" class="inline">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small" type="submit">Send test</button>
+    </form>
+    <form method="post" action="/admin/notifications/{{ r.id }}/delete" class="inline" data-confirm="Delete channel {{ r.name }}?">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Delete</button>
+    </form>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

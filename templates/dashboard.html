@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block body_attrs %} data-events="/admin/events"{% endblock %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <h1>Monitors</h1>
+    <p class="summary">
+      <span class="status s-up"><span class="dot"></span>{{ count_up }} up</span>
+      <span class="status s-down"><span class="dot"></span>{{ count_down }} down</span>
+      <span class="status s-none"><span class="dot"></span>{{ count_other }} other</span>
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/admin/import">Import</a>
+    <a class="btn primary" href="/admin/monitors/new">+ New monitor</a>
+  </div>
+</section>
+
+{% if rows.is_empty() %}
+<section class="empty fade">
+  <p>No monitors yet.</p>
+  <p><a class="btn primary" href="/admin/monitors/new">Add your first monitor</a> <span class="muted">or</span> <a href="/admin/import">import from Uptime Kuma</a></p>
+</section>
+{% else %}
+<section class="monitor-list fade">
+  {% for r in rows %}
+  <a class="monitor-row{% if !r.active %} paused{% endif %}" href="/admin/monitors/{{ r.id }}" data-monitor="{{ r.id }}">
+    <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
+    <span class="mname">
+      <span class="name">{{ r.name }}{% if r.public %} <span class="tag" title="Shown on the public status page">public</span>{% endif %}</span>
+      <span class="target">{{ r.kind }} · {{ r.target }}</span>
+    </span>
+    <span class="beats" data-role="beats">{% for b in r.bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</span>
+    <span class="metric" data-role="latency" title="Last response time">{{ r.latency }}</span>
+    <span class="metric" title="Uptime, last 24 hours">{{ r.uptime_24h }}</span>
+    <span class="metric cert">{% if let Some((days, class)) = r.cert %}<span class="{{ class }}" title="Certificate expires in">🔒 {{ days }}</span>{% endif %}</span>
+  </a>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

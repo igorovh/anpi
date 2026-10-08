@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth fade">
+  <h1>Welcome</h1>
+  <p class="muted">Create the first account. The setup code is printed in the server log, so only someone with access to the server can claim this instance.</p>
+  {% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
+  <form method="post" action="/setup" class="stack">
+    <label>Setup code<input name="setup_code" autocomplete="off" required></label>
+    <label>Username<input name="username" value="{{ username }}" autocomplete="username" required></label>
+    <label>Password <span class="hint">at least 10 characters</span><input type="password" name="password" autocomplete="new-password" minlength="10" required></label>
+    <label>Repeat password<input type="password" name="password2" autocomplete="new-password" minlength="10" required></label>
+    <button type="submit" class="btn primary wide">Create account</button>
+  </form>
+</section>
+{% endblock %}

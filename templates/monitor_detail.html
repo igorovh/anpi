@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block body_attrs %} data-events="/admin/events"{% endblock %}
+{% block content %}
+<section class="page-head fade" data-monitor="{{ m.id }}">
+  <div>
+    <p class="crumbs"><a href="/admin">monitors</a> /</p>
+    <h1>{{ m.name }}</h1>
+    <p class="target">{{ kind_label }} · {{ target }}{% if m.ip_family != "auto" %} · {% if m.ip_family == "v4" %}IPv4 only{% else %}IPv6 only{% endif %}{% endif %}</p>
+    <p><span class="status big {{ status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ status_label }}</span></span></p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="/admin/monitors/{{ m.id }}/edit">Edit</a>
+    <form method="post" action="/admin/monitors/{{ m.id }}/toggle" class="inline">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+      <button class="btn" type="submit">{% if m.active %}Pause{% else %}Resume{% endif %}</button>
+    </form>
+    <form method="post" action="/admin/monitors/{{ m.id }}/delete" class="inline" data-confirm="Delete {{ m.name }} and all of its history?">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+      <button class="btn danger" type="submit">Delete</button>
+    </form>
+  </div>
+</section>
+
+<section class="beats wide fade" data-monitor-beats="{{ m.id }}">{% for b in bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</section>
+
+<section class="stats fade">
+  <div class="stat"><span class="k">Uptime 24h</span><span class="v">{{ uptime_24h }}</span></div>
+  <div class="stat"><span class="k">Uptime 7d</span><span class="v">{{ uptime_7d }}</span></div>
+  <div class="stat"><span class="k">Uptime 30d</span><span class="v">{{ uptime_30d }}</span></div>
+  <div class="stat"><span class="k">Avg response ({{ range }})</span><span class="v">{{ avg_latency }}</span></div>
+  {% if let Some((days, class)) = cert %}
+  <div class="stat"><span class="k">Certificate</span><span class="v {{ class }}" title="{{ cert_date }}">{{ days }}</span></div>
+  {% endif %}
+</section>
+
+{% if let Some(url) = push_url %}
+<section class="card fade">
+  <h3>Push URL</h3>
+  <p class="muted">Call this from your cron job at least every {{ m.interval_s }}s. Use <code>status=down</code> to report a failure, <code>msg</code> for a message and <code>ping</code> for a duration in ms.</p>
+  <pre class="copy" data-copy>curl -fsS "{{ url }}"</pre>
+</section>
+{% endif %}
+
+<section class="card fade">
+  <div class="card-head">
+    <h3>Response time</h3>
+    <nav class="tabs">
+      <a href="?range=24h"{% if range == "24h" %} class="on"{% endif %}>24h</a>
+      <a href="?range=7d"{% if range == "7d" %} class="on"{% endif %}>7d</a>
+      <a href="?range=30d"{% if range == "30d" %} class="on"{% endif %}>30d</a>
+    </nav>
+  </div>
+  {{ chart|safe }}
+  {% if !phases.is_empty() %}
+  <h4>Where the time goes</h4>
+  {{ phase_svg|safe }}
+  <ul class="legend">
+    {% for p in phases %}<li><span class="sw {{ p.class }}"></span>{{ p.label }} <span class="muted">{{ p.value }}</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="grid2 fade">
+  <div class="card">
+    <h3>Incidents</h3>
+    {% if incidents.is_empty() %}<p class="muted">No incidents recorded.</p>{% else %}
+    <ul class="timeline">
+      {% for i in incidents %}
+      <li><span class="when">{{ i.started }}</span><span class="what">{% if i.ongoing %}<span class="tag s-down">ongoing</span> {% endif %}{{ i.duration }} · <span class="muted">{{ i.message }}</span></span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3>Settings</h3>
+    <dl class="facts">
+      <dt>Interval</dt><dd>{{ m.interval_s }}s (retry {{ m.retry_interval_s }}s)</dd>
+      <dt>Timeout</dt><dd>{{ m.timeout_s }}s</dd>
+      <dt>Down after</dt><dd>{{ m.failure_threshold }} failed check{% if m.failure_threshold != 1 %}s{% endif %} in a row</dd>
+      {% if m.kind == "http" %}<dt>Accepted codes</dt><dd>{{ m.expected_status }}</dd>{% endif %}
+      <dt>Notifies</dt><dd>{% if channels.is_empty() %}<span class="muted">nobody</span>{% else %}{{ channels|join(", ") }}{% endif %}</dd>
+      <dt>Public</dt><dd>{% if m.public %}yes{% else %}no{% endif %}</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="card fade">
+  <h3>Recent checks</h3>
+  <div class="table-wrap">
+  <table class="checks">
+    <thead><tr><th>Time</th><th>Status</th><th>Code</th><th>Duration</th><th>IP</th><th>Message</th></tr></thead>
+    <tbody>
+      {% for c in checks %}
+      <tr><td class="nowrap">{{ c.time }}</td><td><span class="status {{ c.status_class }}"><span class="dot"></span>{{ c.status_label }}</span></td><td>{{ c.code }}</td><td class="nowrap">{{ c.total }}</td><td class="mono">{{ c.ip }}</td><td class="msg">{{ c.message }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

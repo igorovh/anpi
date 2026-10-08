@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <p class="crumbs"><a href="/admin/notifications">notifications</a> /</p>
+    <h1>{{ layout.title }}</h1>
+  </div>
+</section>
+{% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
+<form method="post" action="{% if let Some(id) = id %}/admin/notifications/{{ id }}{% else %}/admin/notifications{% endif %}" class="form fade" data-kind-form>
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <fieldset>
+    <div class="row">
+      <label>Type
+        <select name="kind" data-kind-select>
+          {% for (value, label) in kinds %}<option value="{{ value }}"{% if f.is_kind(value) %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="grow">Name<input name="name" value="{{ f.name }}" required></label>
+    </div>
+
+    <div data-kinds="discord">
+      <label>Webhook URL<span class="hint">Server settings → Integrations → Webhooks</span><input name="webhook_url" value="{{ f.cfg.webhook_url }}" spellcheck="false"></label>
+      <label class="narrow">Bot name<span class="hint">optional</span><input name="username" value="{{ f.cfg.username }}"></label>
+    </div>
+
+    <div data-kinds="telegram" class="row">
+      <label class="grow">Bot token<input name="bot_token" value="{{ f.cfg.bot_token }}" spellcheck="false"></label>
+      <label>Chat ID<input name="chat_id" value="{{ f.cfg.chat_id }}"></label>
+    </div>
+
+    <div data-kinds="ntfy">
+      <div class="row">
+        <label class="grow">Server<span class="hint">default https://ntfy.sh</span><input name="server" value="{{ f.cfg.server }}" placeholder="https://ntfy.sh"></label>
+        <label>Topic<input name="topic" value="{{ f.cfg.topic }}"></label>
+      </div>
+      <div class="row">
+        <label class="grow">Access token<span class="hint">optional</span><input name="token" value="{{ f.cfg.token }}" spellcheck="false"></label>
+        <label>Priority<span class="hint">1–5, empty = automatic</span><input name="priority" value="{{ f.cfg.priority }}" size="3"></label>
+      </div>
+    </div>
+
+    <div data-kinds="email">
+      <div class="row">
+        <label class="grow">SMTP host<input name="smtp_host" value="{{ f.cfg.smtp_host }}"></label>
+        <label>Port<input name="smtp_port" value="{{ f.cfg.smtp_port }}" placeholder="587" size="5"></label>
+        <label>Security
+          <select name="smtp_security">
+            <option value="starttls"{% if f.cfg.smtp_security == "starttls" %} selected{% endif %}>STARTTLS</option>
+            <option value="tls"{% if f.cfg.smtp_security == "tls" %} selected{% endif %}>TLS</option>
+            <option value="none"{% if f.cfg.smtp_security == "none" %} selected{% endif %}>None</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="grow">Username<input name="smtp_username" value="{{ f.cfg.smtp_username }}" autocomplete="off"></label>
+        <label class="grow">Password<input type="password" name="smtp_password" value="{{ f.cfg.smtp_password }}" autocomplete="new-password"></label>
+      </div>
+      <div class="row">
+        <label class="grow">From<input name="email_from" value="{{ f.cfg.email_from }}" placeholder="anpi &lt;alerts@example.com&gt;"></label>
+        <label class="grow">To<span class="hint">comma separated</span><input name="email_to" value="{{ f.cfg.email_to }}"></label>
+      </div>
+    </div>
+
+    <div data-kinds="webhook">
+      <label>URL<span class="hint">receives a JSON POST</span><input name="url" value="{{ f.cfg.url }}" spellcheck="false"></label>
+    </div>
+
+    <div class="row checks-row">
+      <label class="check"><input type="checkbox" name="active"{% if f.active.is_some() %} checked{% endif %}> Enabled</label>
+      <label class="check"><input type="checkbox" name="is_default"{% if f.is_default.is_some() %} checked{% endif %}> Pre-select for new monitors</label>
+    </div>
+  </fieldset>
+  <div class="form-actions">
+    <button type="submit" class="btn primary">Save</button>
+    <a class="btn" href="/admin/notifications">Cancel</a>
+  </div>
+</form>
+{% endblock %}

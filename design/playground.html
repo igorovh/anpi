@@ -34,6 +34,28 @@
   .timeline .what .tag { margin-left: 0.5rem; }
   .hero.split { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; text-align: left; }
   .hero.split .overall { margin-top: 0; }
+  /* nested services */
+  .tree-toggle { display: inline-grid; place-items: center; width: 18px; height: 18px; margin: 0 0.35rem 0 -0.2rem; padding: 0;
+    background: none; border: 0; color: var(--muted); cursor: pointer; vertical-align: -0.2em; border-radius: 2px; }
+  .tree-toggle:hover { color: var(--ink); background: var(--raised); }
+  .tree-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
+  .tree-toggle.open svg { transform: rotate(90deg); }
+  .sub-count { margin-left: 0.6rem; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
+  .subservices { margin: 0.9rem 0 0.1rem 0.5rem; border-left: 1px solid var(--faint); }
+  .service.child { padding: 0.45rem 0 0.45rem 1.1rem; border-bottom: 0; position: relative; }
+  .service.child::before { content: ""; position: absolute; left: 0; top: 1.05rem; width: 0.7rem; border-top: 1px solid var(--faint); }
+  .service.child .service-head { margin-bottom: 0.35rem; }
+  .service.child h3 { font-size: 0.9rem; font-weight: 400; }
+  .service.child .status { font-size: 0.78rem; }
+  .service.child .days { height: max(6px, calc(var(--barh, 14px) * 0.6)); }
+  .endpoint { margin-left: 0.6rem; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.72rem; color: var(--muted); }
+  .monitor-row.child { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+  .monitor-row.child .mname { padding-left: 1.4rem; position: relative; }
+  .monitor-row.child .mname::before { content: ""; position: absolute; left: 0.45rem; top: -0.6rem; bottom: 50%; border-left: 1px solid var(--faint); border-bottom: 1px solid var(--faint); width: 0.6rem; }
+  .monitor-row.child:not(.last) .mname::after { content: ""; position: absolute; left: 0.45rem; top: 50%; bottom: -0.6rem; border-left: 1px solid var(--faint); }
+  .monitor-row.child .name { font-weight: 400; font-size: 0.9rem; }
+  .monitor-row.child .beats { height: 14px; }
+  .monitor-row.child .target { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.72rem; }
 </style>
 </head>
 <body>
@@ -205,20 +227,45 @@
       state.ghead === "line" ? ".group-title, .group-head { background: none; padding-top: 1.4rem; }" : "",
       upper ? "" : ".group-title, .group-head, h3, .stat .k, .form legend, .checks th { text-transform:none; letter-spacing:0; font-size:0.85rem; }",
       ".btn, .icon-btn, input, select, textarea, .overall, .tag, .nav a, .tabs a, pre.copy { border-radius:" + r + "; }",
-      ".days { height:" + state.barh + "px; gap:" + state.gap + "px; } .day, .hb { border-radius:" + state.barr + "px; }",
+      ":root { --barh:" + state.barh + "px; } .days { height:" + state.barh + "px; gap:" + state.gap + "px; } .day, .hb { border-radius:" + state.barr + "px; }",
       ".beats { gap:" + Math.max(1, state.gap - 1) + "px; }"
     ].join("\n");
   }
 
   function rand(seed) { var x = Math.sin(seed) * 10000; return x - Math.floor(x); }
 
+  // [name, status, uptime%, children?, endpoint?]; a parent's status and bars are the worst of its children.
   var GROUPS = [
-    { name: "Twitch Enhancer", items: [["Website", "up", 99.98], ["Twitch", "up", 99.87], ["Discord connectivity", "down", 99.21]] },
+    { name: "Twitch Enhancer", items: [
+      ["Website", "up", 99.98],
+      ["API", null, null, [
+        ["Badges", "up", 99.97, null, "GET /v1/badges"],
+        ["Emotes", "pending", 99.71, null, "GET /v1/emotes"],
+        ["Settings sync", "up", 100, null, "POST /v1/sync"]
+      ]],
+      ["Twitch", "up", 99.87],
+      ["Discord connectivity", "down", 99.21]
+    ] },
     { name: "GitHub", items: [["GitHub API", "up", 99.96], ["GitHub status", "pending", 99.99]] },
     { name: "Infrastructure", items: [["Cloudflare DNS", "up", 100], ["Backups", "maintenance", 100]] }
   ];
   var LABEL = { up: "Up", down: "Down", pending: "Degraded", maintenance: "Maintenance" };
   var CLS = { up: "s-up", down: "s-down", pending: "s-pending", maintenance: "s-maint" };
+  var STATUS_RANK = { up: 0, maintenance: 1, pending: 2, down: 3 };
+  var DAY_RANK = { "b-none": 0, "b-up": 1, "b-minor": 2, "b-partial": 3, "b-down": 4 };
+  var collapsed = {};
+
+  function worst(list, rank) {
+    return list.reduce(function (a, b) { return rank[b] > rank[a] ? b : a; });
+  }
+
+  function statusOf(it) {
+    return it[3] ? worst(it[3].map(statusOf), STATUS_RANK) : it[1];
+  }
+
+  function uptimeOf(it) {
+    return it[3] ? Math.min.apply(null, it[3].map(uptimeOf)) : it[2];
+  }
 
   function dayClass(seed, pct) {
     var r = rand(seed);
@@ -229,49 +276,96 @@
     return "b-up";
   }
 
+  function dayBars(it, seed) {
+    var out = [];
+    for (var d = 0; d < state.days; d++) {
+      var c;
+      if (it[3]) {
+        c = worst(it[3].map(function (ch, ci) { return dayBars(ch, seed * 7 + ci + 1)[d]; }), DAY_RANK);
+      } else {
+        c = dayClass(seed * 100 + d, it[2]);
+        if (d === state.days - 1 && it[1] === "down") c = "b-down";
+        if (d === state.days - 1 && it[1] === "pending") c = "b-partial";
+      }
+      out.push(c);
+    }
+    return out;
+  }
+
+  function serviceHtml(it, seed, child) {
+    var st = statusOf(it), kids = it[3], open = !collapsed[it[0]];
+    var bars = dayBars(it, seed).map(function (c) { return '<span class="day ' + c + '"></span>'; }).join("");
+    var toggle = kids ? '<button class="tree-toggle' + (open ? " open" : "") + '" data-toggle="' + it[0] + '" aria-expanded="' + open +
+      '" title="' + (open ? "Hide" : "Show") + ' endpoints">' +
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : "";
+    var meta = kids ? '<span class="sub-count">' + kids.length + " endpoints</span>" : "";
+    var html = '<article class="service' + (child ? " child" : "") + (kids ? " parent" : "") + '"><div class="service-head"><h3>' + toggle + it[0] + meta +
+      (child ? '<span class="endpoint">' + it[4] + "</span>" : "") +
+      '</h3><span class="status ' + CLS[st] + '"><span class="dot"></span>' + LABEL[st] + '</span></div><div class="days">' + bars + "</div>";
+    if (!child) {
+      html += '<div class="days-legend"><span>' + state.days + ' days ago</span><span class="uptime">' + uptimeOf(it).toFixed(2) +
+        "% uptime</span><span>today</span></div>";
+    }
+    if (kids && open) {
+      html += '<div class="subservices">' + kids.map(function (ch, ci) {
+        return serviceHtml(ch, seed * 7 + ci + 1, true);
+      }).join("") + "</div>";
+    }
+    return html + "</article>";
+  }
+
   function renderStatus() {
     var html = "";
     GROUPS.forEach(function (g, gi) {
       html += '<section class="group"><h2 class="group-title">' + g.name + "</h2>";
-      g.items.forEach(function (it, ii) {
-        var bars = "";
-        for (var d = 0; d < state.days; d++) {
-          var c = dayClass(gi * 100 + ii * 10 + d, it[2]);
-          if (d === state.days - 1 && it[1] === "down") c = "b-down";
-          bars += '<span class="day ' + c + '"></span>';
-        }
-        html += '<article class="service"><div class="service-head"><h3>' + it[0] + '</h3><span class="status ' + CLS[it[1]] +
-          '"><span class="dot"></span>' + LABEL[it[1]] + '</span></div><div class="days">' + bars +
-          '</div><div class="days-legend"><span>' + state.days + ' days ago</span><span class="uptime">' + it[2].toFixed(2) +
-          "% uptime</span><span>today</span></div></article>";
-      });
+      g.items.forEach(function (it, ii) { html += serviceHtml(it, gi * 10 + ii + 1, false); });
       html += "</section>";
     });
     document.getElementById("groups").innerHTML = html;
+  }
+
+  function dashRow(it, seed, child, last) {
+    var st = statusOf(it), kids = it[3] && !child ? it[3] : null, open = !collapsed[it[0]];
+    var beats = "";
+    for (var b = 0; b < 40; b++) {
+      var r = rand(seed * 13 + b), s = r < 0.04 ? "s-down" : r < 0.07 ? "s-pending" : "s-up";
+      if (st === "down" && b > 36) s = "s-down";
+      if (st === "pending" && b > 37) s = "s-pending";
+      if (st === "maintenance" && b > 30) s = "s-maint";
+      beats += '<span class="hb ' + s + '"></span>';
+    }
+    var ms = Math.round(40 + rand(seed) * 300);
+    var target = child ? it[4] : kids ? kids.length + " endpoints" : "HTTP(S) · https://example.com/" + it[0].toLowerCase().replace(/\s+/g, "-");
+    var toggle = kids ? '<button class="tree-toggle' + (open ? " open" : "") + '" data-toggle="' + it[0] + '" aria-expanded="' + open +
+      '"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : "";
+    var html = '<a class="monitor-row' + (child ? " child" + (last ? " last" : "") : "") + '" href="#"><span class="status ' + CLS[st] +
+      '"><span class="dot"></span>' + (st === "pending" ? "Pending" : LABEL[st]) + '</span><span class="mname"><span class="name">' + toggle + it[0] +
+      '</span><span class="target">' + target + '</span></span><span class="beats">' + beats + '</span><span class="metric">' +
+      (kids ? "–" : ms + " ms") + '</span><span class="metric">' + uptimeOf(it).toFixed(2) +
+      '%</span><span class="metric cert">' + (child ? "" : '<span class="cert-ok">🔒 ' + (20 + seed) + "d</span>") + "</span></a>";
+    if (kids && open) {
+      kids.forEach(function (ch, ci) { html += dashRow(ch, seed * 7 + ci + 1, true, ci === kids.length - 1); });
+    }
+    return html;
   }
 
   function renderDash() {
     var html = "";
     GROUPS.forEach(function (g, gi) {
       html += '<div class="group-head">' + g.name + ' <span class="muted">' + g.items.length + "</span></div>";
-      g.items.forEach(function (it, ii) {
-        var beats = "";
-        for (var b = 0; b < 40; b++) {
-          var r = rand(gi * 50 + ii * 7 + b), s = r < 0.04 ? "s-down" : r < 0.07 ? "s-pending" : "s-up";
-          if (it[1] === "down" && b > 36) s = "s-down";
-          if (it[1] === "maintenance" && b > 30) s = "s-maint";
-          beats += '<span class="hb ' + s + '"></span>';
-        }
-        var ms = Math.round(40 + rand(gi + ii) * 300);
-        html += '<a class="monitor-row" href="#"><span class="status ' + CLS[it[1]] + '"><span class="dot"></span>' +
-          (it[1] === "pending" ? "Pending" : LABEL[it[1]]) + '</span><span class="mname"><span class="name">' + it[0] +
-          '</span><span class="target">HTTP(S) · https://example.com/' + it[0].toLowerCase().replace(/\s+/g, "-") +
-          '</span></span><span class="beats">' + beats + '</span><span class="metric">' + ms + ' ms</span><span class="metric">' +
-          it[2].toFixed(2) + '%</span><span class="metric cert"><span class="cert-ok">🔒 ' + (20 + gi * 17 + ii) + "d</span></span></a>";
-      });
+      g.items.forEach(function (it, ii) { html += dashRow(it, gi * 10 + ii + 1, false, false); });
     });
     document.getElementById("dash-list").innerHTML = html;
   }
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-toggle]");
+    if (!btn) return;
+    e.preventDefault();
+    collapsed[btn.dataset.toggle] = !collapsed[btn.dataset.toggle];
+    renderStatus();
+    renderDash();
+  });
 
   function apply() {
     document.documentElement.dataset.theme = state.theme;

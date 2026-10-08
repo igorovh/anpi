@@ -42,12 +42,39 @@
   .tree-toggle.open svg { transform: rotate(90deg); }
   .sub-count { margin-left: 0.6rem; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
   .service.parent:has(+ .service.child) { border-bottom: 1px dashed var(--line); }
-  .service.child { padding-left: calc(var(--side, 2rem) + 1.6rem); position: relative; }
-  .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 0; height: 50%; width: 0.7rem;
-    border-left: 1px solid var(--faint); border-bottom: 1px solid var(--faint); }
-  .service.child:not(.last)::after { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 50%; bottom: 0; border-left: 1px solid var(--faint); }
   .service.child:not(.last) { border-bottom-style: dashed; }
   .service.child h3 { font-weight: 400; }
+  .service .parent-prefix { display: none; color: var(--muted); }
+
+  /* tree */
+  .ep-tree .service.child { padding-left: calc(var(--side, 2rem) + 1.6rem); position: relative; }
+  .ep-tree .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 0; height: 50%; width: 0.7rem;
+    border-left: 1px solid var(--faint); border-bottom: 1px solid var(--faint); }
+  .ep-tree .service.child:not(.last)::after { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 50%; bottom: 0; border-left: 1px solid var(--faint); }
+
+  /* shaded */
+  .ep-shaded .service.child { padding-left: calc(var(--side, 2rem) + 1.4rem); background: var(--panel); }
+  .ep-shaded .service.parent:has(+ .service.child) { border-bottom-style: solid; }
+
+  /* rail */
+  .ep-rail .service.child { padding-left: calc(var(--side, 2rem) + 1.4rem); position: relative; }
+  .ep-rail .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.2rem); top: 0; bottom: 0; width: 2px; background: var(--rail, var(--faint)); }
+  .ep-rail .service.child:first-of-type::before, .ep-rail .service.parent + .service.child::before { top: 0.6rem; }
+  .ep-rail .service.child.last::before { bottom: 0.6rem; }
+
+  /* prefix */
+  .ep-prefix .service .parent-prefix { display: inline; }
+  .ep-prefix .service.child { padding-left: var(--side, 2rem); }
+  .ep-prefix .service.child:not(.last), .ep-prefix .service.parent:has(+ .service.child) { border-bottom-style: solid; }
+
+  /* compact */
+  .ep-compact .service.child { padding-left: calc(var(--side, 2rem) + 1.4rem); padding-top: 0.55rem; padding-bottom: 0.55rem;
+    display: grid; grid-template-columns: minmax(8rem, 1fr) 2fr; align-items: center; gap: 1.2rem; }
+  .ep-compact .service.child .service-head { margin: 0; }
+  .ep-compact .service.child .days { height: 8px; }
+  .ep-compact .service.child .days-legend { display: none; }
+  .ep-compact .service.child h3 { font-size: 0.9rem; }
+  .ep-compact .service.child .status { font-size: 0.78rem; }
   .endpoint { margin-left: 0.6rem; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.72rem; color: var(--muted); }
   .monitor-row.child { padding-top: 0.5rem; padding-bottom: 0.5rem; }
   .monitor-row.child .mname { padding-left: 1.4rem; position: relative; }
@@ -83,6 +110,10 @@
   <label class="sel">Side lines<select data-k="frame"><option value="on">on</option><option value="off">off</option></select></label>
   <label class="sel">Hero align<select data-k="hero"><option value="split">title left, status right</option><option value="center">center</option><option value="left">left</option></select></label>
   <label class="sel">Nav links<select data-k="nav"><option value="center">center</option><option value="right">right</option></select></label>
+  <label class="sel">Endpoint style<select data-k="ep">
+    <option value="shaded">shaded</option><option value="rail">rail</option><option value="prefix">prefix "API / …"</option>
+    <option value="compact">compact rows</option><option value="tree">tree lines</option>
+  </select></label>
   <label class="sel">Group header<select data-k="ghead"><option value="band">shaded band</option><option value="plain">plain text</option><option value="line">text + line</option></select></label>
   <label>Corner radius<input type="range" data-k="radius" min="0" max="10" step="1"><output></output></label>
 
@@ -172,7 +203,7 @@
   "use strict";
   var DEFAULTS = {
     font: "IBM Plex Sans JP", size: 15, weight: 400, hweight: 500, h1: 2.1, labels: "upper",
-    width: 860, pad: 1.2, side: 2, frame: "on", hero: "split", nav: "center", ghead: "band", radius: 2,
+    width: 860, pad: 1.2, side: 2, frame: "on", hero: "split", nav: "center", ghead: "band", ep: "shaded", radius: 2,
     palette: "muted", bg: "warm", line: 30, barh: 14, gap: 3, barr: 1, days: 30, theme: "dark", view: "status"
   };
   var KEY = "anpi-playground";
@@ -293,19 +324,20 @@
     return out;
   }
 
-  function serviceHtml(it, seed, child, last) {
+  function serviceHtml(it, seed, child, last, parentName, parentStatus) {
     var st = statusOf(it), kids = child ? null : it[3], open = !collapsed[it[0]];
     var bars = dayBars(it, seed).map(function (c) { return '<span class="day ' + c + '"></span>'; }).join("");
     var toggle = kids ? '<button class="tree-toggle' + (open ? " open" : "") + '" data-toggle="' + it[0] + '" aria-expanded="' + open +
       '" title="' + (open ? "Hide" : "Show") + ' endpoints"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : "";
     var meta = kids ? '<span class="sub-count">' + kids.length + " endpoints</span>" : "";
-    var html = '<article class="service' + (child ? " child" + (last ? " last" : "") : "") + (kids ? " parent" : "") + '"><div class="service-head"><h3>' +
-      toggle + it[0] + meta +
+    var rail = child ? ' style="--rail: var(--' + ({ up: "faint", down: "down", pending: "pending", maintenance: "maint" })[parentStatus] + ')"' : "";
+    var html = '<article class="service' + (child ? " child" + (last ? " last" : "") : "") + (kids ? " parent" : "") + '"' + rail + '><div class="service-head"><h3>' +
+      toggle + (child ? '<span class="parent-prefix">' + parentName + ' / </span>' : '') + it[0] + meta +
       '</h3><span class="status ' + CLS[st] + '"><span class="dot"></span>' + LABEL[st] + '</span></div><div class="days">' + bars +
       '</div><div class="days-legend"><span>' + state.days + ' days ago</span><span class="uptime">' + uptimeOf(it).toFixed(2) +
       "% uptime</span><span>today</span></div></article>";
     if (kids && open) {
-      kids.forEach(function (ch, ci) { html += serviceHtml(ch, seed * 7 + ci + 1, true, ci === kids.length - 1); });
+      kids.forEach(function (ch, ci) { html += serviceHtml(ch, seed * 7 + ci + 1, true, ci === kids.length - 1, it[0], st); });
     }
     return html;
   }
@@ -366,6 +398,7 @@
   function apply() {
     document.documentElement.dataset.theme = state.theme;
     document.querySelector(".hero").classList.toggle("split", state.hero === "split");
+    document.body.className = document.body.className.replace(/\bep-\S+/g, "").trim() + " ep-" + state.ep;
     document.getElementById("knobs").textContent = css();
     document.querySelectorAll(".view").forEach(function (v) { v.hidden = v.dataset.view !== state.view; });
     document.querySelectorAll("#view-seg button").forEach(function (b) { b.classList.toggle("on", b.dataset.view === state.view); });

@@ -68,7 +68,7 @@
   .ep-prefix .service.child:not(.last), .ep-prefix .service.parent:has(+ .service.child) { border-bottom-style: solid; }
 
   /* compact */
-  .ep-compact .service.child { padding-left: calc(var(--side, 2rem) + 1.4rem); padding-top: 0.55rem; padding-bottom: 0.55rem;
+  .ep-compact .service.child { padding-left: var(--side, 2rem); padding-top: 0.55rem; padding-bottom: 0.55rem;
     display: grid; grid-template-columns: minmax(8rem, 1fr) 2fr; align-items: center; gap: 1.2rem; }
   .ep-compact .service.child .service-head { margin: 0; }
   .ep-compact .service.child .days { height: 8px; }

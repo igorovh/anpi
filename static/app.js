@@ -60,6 +60,29 @@
     });
   });
 
+  // Collapsible sub-monitors; the choice is remembered per parent.
+  var COLLAPSE_KEY = "anpi-collapsed";
+  var collapsedIds = {};
+  try { collapsedIds = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "{}"); } catch (e) {}
+  function applyCollapse(id) {
+    var shut = !!collapsedIds[id];
+    document.querySelectorAll('[data-parent="' + id + '"]').forEach(function (c) { c.hidden = shut; });
+    document.querySelectorAll('[data-toggle="' + id + '"]').forEach(function (b) {
+      b.classList.toggle("open", !shut);
+      b.setAttribute("aria-expanded", String(!shut));
+    });
+  }
+  document.querySelectorAll("[data-toggle]").forEach(function (b) {
+    applyCollapse(b.dataset.toggle);
+    b.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      collapsedIds[b.dataset.toggle] = !collapsedIds[b.dataset.toggle];
+      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsedIds)); } catch (err) {}
+      applyCollapse(b.dataset.toggle);
+    });
+  });
+
   // Live updates over server-sent events.
   var source = document.body.dataset.events;
   if (!source || !window.EventSource) return;
@@ -83,11 +106,34 @@
     if (strip.firstElementChild) strip.removeChild(strip.firstElementChild);
   }
 
+  var severity = { up: 0, maintenance: 1, pending: 2, down: 3 };
+  function statusFromClass(el) {
+    if (el.classList.contains("s-down")) return "down";
+    if (el.classList.contains("s-pending")) return "pending";
+    if (el.classList.contains("s-maint")) return "maintenance";
+    if (el.classList.contains("s-up")) return "up";
+    return null;
+  }
+
+  // A parent row shows the worst of its own status (unless it is an aggregate) and its children.
+  function recomputeParent(row) {
+    var states = [];
+    if (row.dataset.aggregate === "false" && row.dataset.own) states.push(row.dataset.own);
+    document.querySelectorAll('[data-parent="' + row.dataset.monitor + '"] [data-role=status]').forEach(function (s) {
+      var v = statusFromClass(s);
+      if (v) states.push(v);
+    });
+    if (!states.length) return;
+    var worst = states.reduce(function (a, b) { return severity[b] > severity[a] ? b : a; });
+    var st = row.querySelector("[data-role=status]");
+    if (st) setStatus(st, worst);
+  }
+
   function updateOverall() {
     var box = document.getElementById("overall");
     if (!box) return;
     var states = [];
-    document.querySelectorAll("[data-monitor] [data-role=status]").forEach(function (s) {
+    document.querySelectorAll("[data-monitor]:not([data-parent]) [data-role=status]").forEach(function (s) {
       if (s.classList.contains("s-paused") || s.classList.contains("s-none")) return;
       states.push(s.classList.contains("s-down") ? "down" : s.classList.contains("s-pending") ? "pending" : s.classList.contains("s-maint") ? "maint" : "up");
     });
@@ -109,13 +155,23 @@
     try { ev = JSON.parse(msg.data); } catch (e) { return; }
     document.querySelectorAll('[data-monitor="' + ev.monitor_id + '"]').forEach(function (row) {
       var st = row.querySelector("[data-role=status]");
-      if (st) setStatus(st, ev.status);
+      if (row.dataset.aggregate !== undefined) {
+        row.dataset.own = ev.status;
+        recomputeParent(row);
+      } else if (st) {
+        setStatus(st, ev.status);
+      }
       var lat = row.querySelector("[data-role=latency]");
       if (lat) lat.textContent = ev.latency;
       var strip = row.querySelector("[data-role=beats]");
       if (strip) pushBeat(strip, ev);
     });
     document.querySelectorAll('[data-monitor-beats="' + ev.monitor_id + '"]').forEach(function (s) { pushBeat(s, ev); });
+    var child = document.querySelector('[data-monitor="' + ev.monitor_id + '"][data-parent]');
+    if (child) {
+      var parent = document.querySelector('[data-monitor="' + child.dataset.parent + '"][data-aggregate]');
+      if (parent) recomputeParent(parent);
+    }
     updateOverall();
   };
 })();

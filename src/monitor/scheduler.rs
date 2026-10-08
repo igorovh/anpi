@@ -95,6 +95,10 @@ impl Scheduler {
     }
 
     async fn spawn(&self, m: Monitor) {
+        // Aggregates only summarise their sub-monitors.
+        if m.kind() == MonitorKind::Aggregate {
+            return;
+        }
         let cancel = CancellationToken::new();
         let (push_rx, push_token) = match (m.kind(), &m.push_token) {
             (MonitorKind::Push, Some(token)) => {

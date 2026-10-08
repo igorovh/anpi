@@ -10,6 +10,20 @@ pub enum Status {
 }
 
 impl Status {
+    /// Severity used when combining several statuses into one.
+    pub fn severity(self) -> u8 {
+        match self {
+            Self::Up => 0,
+            Self::Maintenance => 1,
+            Self::Pending => 2,
+            Self::Down => 3,
+        }
+    }
+
+    pub fn worst(statuses: impl IntoIterator<Item = Status>) -> Option<Status> {
+        statuses.into_iter().max_by_key(|s| s.severity())
+    }
+
     pub fn from_i64(v: i64) -> Self {
         match v {
             1 => Self::Up,
@@ -40,10 +54,11 @@ pub enum MonitorKind {
     Ping,
     Dns,
     Push,
+    Aggregate,
 }
 
 impl MonitorKind {
-    pub const ALL: [MonitorKind; 5] = [Self::Http, Self::Tcp, Self::Ping, Self::Dns, Self::Push];
+    pub const ALL: [MonitorKind; 6] = [Self::Http, Self::Tcp, Self::Ping, Self::Dns, Self::Push, Self::Aggregate];
 
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
@@ -52,6 +67,7 @@ impl MonitorKind {
             "ping" => Self::Ping,
             "dns" => Self::Dns,
             "push" => Self::Push,
+            "aggregate" => Self::Aggregate,
             _ => return None,
         })
     }
@@ -63,6 +79,7 @@ impl MonitorKind {
             Self::Ping => "ping",
             Self::Dns => "dns",
             Self::Push => "push",
+            Self::Aggregate => "aggregate",
         }
     }
 
@@ -73,6 +90,7 @@ impl MonitorKind {
             Self::Ping => "Ping",
             Self::Dns => "DNS",
             Self::Push => "Push (cron heartbeat)",
+            Self::Aggregate => "Aggregate (status of sub-monitors)",
         }
     }
 }
@@ -174,6 +192,7 @@ pub struct Monitor {
     pub updated_at: i64,
     pub group_id: Option<i64>,
     pub public_name: String,
+    pub parent_id: Option<i64>,
 }
 
 impl Monitor {
@@ -199,6 +218,7 @@ impl Monitor {
             MonitorKind::Tcp => format!("{}:{}", self.target, self.port.unwrap_or(0)),
             MonitorKind::Dns => format!("{} {}", self.dns_record_type, self.target),
             MonitorKind::Push => "push".into(),
+            MonitorKind::Aggregate => "sub-monitors".into(),
             _ => self.target.clone(),
         }
     }
@@ -231,6 +251,7 @@ pub struct MonitorInput {
     pub public: bool,
     pub group_id: Option<i64>,
     pub public_name: String,
+    pub parent_id: Option<i64>,
 }
 
 impl MonitorInput {
@@ -362,4 +383,17 @@ pub struct Maintenance {
     pub ends_at: i64,
     pub all_monitors: bool,
     pub created_at: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worst_status_prefers_outages() {
+        assert_eq!(Status::worst([Status::Up, Status::Pending, Status::Maintenance]), Some(Status::Pending));
+        assert_eq!(Status::worst([Status::Up, Status::Down, Status::Pending]), Some(Status::Down));
+        assert_eq!(Status::worst([Status::Up, Status::Maintenance]), Some(Status::Maintenance));
+        assert_eq!(Status::worst([]), None);
+    }
 }

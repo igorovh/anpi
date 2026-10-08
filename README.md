@@ -12,6 +12,8 @@ A lightweight uptime monitor written in Rust. One ~10 MB binary with an embedded
 - **Certificate expiry warnings** at the configured window, then at 7, 3 and 1 days before expiry.
 - **Alerts** to Discord, Telegram, ntfy, e-mail (SMTP) or any JSON webhook. Each alert fires once per transition: down, back up, or certificate expiring.
 - **Maintenance windows** suppress alerts.
+- **Groups and sub-monitors.** Monitors can be grouped, and one monitor can sit under another, e.g. API endpoints under an "API" aggregate. The parent shows the worst status of its children.
+- **Branding:** your own site name, logo (also used as the favicon) and public display names per monitor.
 - **Public status page at `/`** with 30-day uptime bars and incidents, plus `/api/status.json`.
 - **Live updates** over server-sent events.
 - **Data retention:** raw checks for 24 h, then hourly roll-ups for a year. A few dozen monitors stay well under 100 MB.

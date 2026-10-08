@@ -38,7 +38,7 @@
     </div>
   </fieldset>
 
-  <fieldset>
+  <fieldset data-kinds="http tcp ping dns push">
     <legend>Timing</legend>
     <div class="row">
       <label><span data-kinds="http tcp ping dns">Check every (s)</span><span data-kinds="push">Expect a push every (s)</span><input name="interval_s" value="{{ f.interval_s }}" inputmode="numeric" size="7"></label>
@@ -93,7 +93,7 @@
     </div>
   </fieldset>
 
-  <fieldset>
+  <fieldset data-kinds="http tcp ping dns push">
     <legend>Notifications</legend>
     {% if channels.is_empty() %}
     <p class="muted">No channels yet. <a href="/admin/notifications/new">Add one</a> to get alerts.</p>
@@ -113,8 +113,15 @@
           {% for g in groups %}<option value="{{ g.id }}"{% if f.in_group(g.id) %} selected{% endif %}>{{ g.name }}</option>{% endfor %}
         </select>
       </label>
+      <label>Show under
+        <select name="parent_id">
+          <option value="">Nothing (top level)</option>
+          {% for (pid, pname) in parents %}<option value="{{ pid }}"{% if f.has_parent(pid) %} selected{% endif %}>{{ pname }}</option>{% endfor %}
+        </select>
+      </label>
       <label class="grow">Public name<span class="hint">shown on the status page; empty = same as name</span><input name="public_name" value="{{ f.public_name }}" maxlength="100"></label>
     </div>
+    <p class="muted small" data-kinds="aggregate">An aggregate runs no checks. Put monitors under it with “Show under”; it shows their worst status.</p>
     <div class="row checks-row">
       <label class="check"><input type="checkbox" name="active"{% if f.active.is_some() %} checked{% endif %}> Active</label>
       <label class="check"><input type="checkbox" name="public"{% if f.public.is_some() %} checked{% endif %}> Show on the public status page</label>

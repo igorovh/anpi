@@ -2,8 +2,10 @@
 {% block body_attrs %} data-events="/events/public" class="public"{% endblock %}
 {% block content %}
 <section class="hero fade">
-  <h1>{{ layout.title }}</h1>
-  {% if !description.is_empty() %}<p class="lede">{{ description }}</p>{% endif %}
+  <div class="hero-text">
+    <h1>{{ layout.title }}</h1>
+    {% if !description.is_empty() %}<p class="lede">{{ description }}</p>{% endif %}
+  </div>
   <div class="overall {{ overall_class }}" id="overall">
     <span class="dot"></span><span class="overall-label">{{ overall_label }}</span>
   </div>
@@ -16,9 +18,9 @@
 <section class="group fade">
   {% if let Some(name) = g.name %}<h2 class="group-title">{{ name }}</h2>{% endif %}
   {% for m in g.monitors %}
-  <article class="service" data-monitor="{{ m.id }}">
+  <article class="service{% if !m.children.is_empty() %} parent{% endif %}" data-monitor="{{ m.id }}"{% if !m.children.is_empty() %} data-aggregate="{{ m.aggregate }}"{% endif %}>
     <div class="service-head">
-      <h3>{{ m.name }}</h3>
+      <h3>{% if !m.children.is_empty() %}<button class="tree-toggle open" type="button" data-toggle="{{ m.id }}" aria-expanded="true" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}{{ m.name }}{% if !m.children.is_empty() %}<span class="sub-count">{{ m.children.len() }} component{% if m.children.len() != 1 %}s{% endif %}</span>{% endif %}</h3>
       <span class="status {{ m.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ m.status_label }}</span></span>
     </div>
     <div class="days" aria-label="Daily uptime, last 30 days">
@@ -26,6 +28,17 @@
     </div>
     <div class="days-legend"><span>30 days ago</span><span class="uptime">{{ m.uptime_30d }} uptime · 24h {{ m.uptime_24h }}</span><span>today</span></div>
   </article>
+  {% for c in m.children %}
+  <article class="service child{% if loop.last %} last{% endif %}" data-monitor="{{ c.id }}" data-parent="{{ m.id }}">
+    <div class="service-head">
+      <h3>{{ c.name }}</h3>
+      <span class="status {{ c.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ c.status_label }}</span></span>
+    </div>
+    <div class="days" aria-label="Daily uptime, last 30 days">
+      {% for b in c.bars %}<span class="day {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}
+    </div>
+  </article>
+  {% endfor %}
   {% endfor %}
 </section>
 {% endfor %}
@@ -39,7 +52,7 @@
     {% for i in incidents %}
     <li>
       <span class="when">{{ i.started }}</span>
-      <span class="what"><strong>{{ i.monitor }}</strong> {% if i.ongoing %}has been down for {{ i.duration }} <span class="tag s-down">ongoing</span>{% else %}was down for {{ i.duration }}{% endif %}</span>
+      <span class="what"><strong>{{ i.monitor }}</strong> {% if i.ongoing %}has been down for {{ i.duration }}<span class="tag s-down">ongoing</span>{% else %}was down for {{ i.duration }}{% endif %}</span>
     </li>
     {% endfor %}
   </ul>

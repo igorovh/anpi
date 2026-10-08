@@ -31,6 +31,7 @@ pub async fn run(m: &Monitor) -> CheckOutcome {
         MonitorKind::Ping => ping::check(&m.target, m.ip_family(), timeout).await,
         MonitorKind::Dns => dns::check(&m.target, &m.dns_record_type, &m.dns_server, &m.content_expected, timeout).await,
         MonitorKind::Push => CheckOutcome::fail("push monitors are not actively checked"),
+        MonitorKind::Aggregate => CheckOutcome::fail("aggregate monitors are not checked"),
     }
 }
 

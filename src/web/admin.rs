@@ -24,17 +24,46 @@ pub struct NoticeQuery {
 pub struct MonitorRow {
     pub id: i64,
     pub group_id: Option<i64>,
+    pub parent_id: Option<i64>,
     pub name: String,
     pub kind: &'static str,
     pub target: String,
+    pub status: Option<Status>,
     pub status_class: &'static str,
     pub status_label: &'static str,
     pub latency: String,
+    pub uptime: Option<f64>,
     pub uptime_24h: String,
     pub bars: Vec<Bar>,
     pub cert: Option<(String, &'static str)>,
     pub active: bool,
     pub public: bool,
+    pub aggregate: bool,
+    pub children: Vec<MonitorRow>,
+}
+
+impl MonitorRow {
+    /// A parent shows the worst status, lowest uptime and worst bars of itself and its children.
+    fn absorb_children(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let own = self.status.filter(|_| self.active);
+        let statuses = own.into_iter().chain(self.children.iter().filter(|c| c.active).filter_map(|c| c.status));
+        if let Some(worst) = Status::worst(statuses) {
+            self.status = Some(worst);
+            self.status_class = views::status_class(worst);
+            self.status_label = status_label(worst);
+        }
+        let uptimes = self.uptime.into_iter().chain(self.children.iter().filter_map(|c| c.uptime));
+        self.uptime = uptimes.fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.min(b))));
+        self.uptime_24h = format_pct(self.uptime);
+        let mut strips: Vec<&[Bar]> = self.children.iter().map(|c| c.bars.as_slice()).collect();
+        if !self.aggregate {
+            strips.push(&self.bars);
+        }
+        self.bars = views::worst_bars(&strips);
+    }
 }
 
 #[derive(Template)]
@@ -57,35 +86,47 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
     let mut rows = Vec::with_capacity(monitors.len());
     let (mut count_up, mut count_down, mut count_other) = (0, 0, 0);
     for m in monitors {
+        let aggregate = m.kind() == MonitorKind::Aggregate;
         let beats = recent.get(&m.id).map(Vec::as_slice).unwrap_or_default();
         let last = beats.last();
-        let (status_class, status_label) = match (m.active, last.map(|b| b.status())) {
+        let status = last.map(|b| b.status());
+        let (status_class, status_label) = match (m.active, status) {
             (false, _) => ("s-paused", "Paused"),
-            (true, None) => ("s-none", "Waiting"),
+            (true, None) => ("s-none", if aggregate { "No data" } else { "Waiting" }),
             (true, Some(s)) => (views::status_class(s), status_label(s)),
         };
-        match (m.active, last.map(|b| b.status())) {
-            (true, Some(Status::Up)) => count_up += 1,
-            (true, Some(Status::Down)) => count_down += 1,
-            _ => count_other += 1,
+        if !aggregate {
+            match (m.active, status) {
+                (true, Some(Status::Up)) => count_up += 1,
+                (true, Some(Status::Down)) => count_down += 1,
+                _ => count_other += 1,
+            }
         }
         let cert_expiry = beats.iter().rev().find_map(|b| b.cert_expires_at);
+        let uptime = up24.get(&m.id).copied();
         rows.push(MonitorRow {
             id: m.id,
             group_id: m.group_id,
+            parent_id: m.parent_id,
             name: m.name.clone(),
             kind: m.kind().label(),
             target: m.display_target(),
+            status,
             status_class,
             status_label,
-            latency: format_ms(last.and_then(|b| b.total_ms)),
-            uptime_24h: format_pct(up24.get(&m.id).copied()),
+            latency: if aggregate { format_ms(None) } else { format_ms(last.and_then(|b| b.total_ms)) },
+            uptime,
+            uptime_24h: format_pct(uptime),
             bars: views::heartbeat_bars(beats, 40),
             cert: views::cert_info(cert_expiry, now),
             active: m.active,
             public: m.public,
+            aggregate,
+            children: Vec::new(),
         });
     }
+    let mut rows = views::nest(rows, |r| r.id, |r| r.parent_id, |r| &mut r.children);
+    rows.iter_mut().for_each(MonitorRow::absorb_children);
     let all_groups = store::groups::list(db).await?;
     render(&DashboardPage {
         layout: Layout::admin("Monitors", &user, "monitors").with_notice(q.notice.as_deref()),
@@ -133,6 +174,7 @@ pub struct MonitorForm {
     pub channels: Vec<i64>,
     pub group_id: String,
     pub public_name: String,
+    pub parent_id: String,
 }
 
 impl Default for MonitorForm {
@@ -175,6 +217,7 @@ impl MonitorForm {
             channels,
             group_id: m.group_id.map(|g| g.to_string()).unwrap_or_default(),
             public_name: m.public_name.clone(),
+            parent_id: m.parent_id.map(|p| p.to_string()).unwrap_or_default(),
         }
     }
 
@@ -205,6 +248,7 @@ impl MonitorForm {
             public: m.public,
             group_id: m.group_id,
             public_name: m.public_name.clone(),
+            parent_id: m.parent_id,
         };
         Self::from_monitor_input(&input, channels)
     }
@@ -221,6 +265,10 @@ impl MonitorForm {
         self.group_id == id.to_string()
     }
 
+    pub fn has_parent(&self, id: &i64) -> bool {
+        self.parent_id == id.to_string()
+    }
+
     pub fn is_method(&self, m: &str) -> bool {
         self.method == m
     }
@@ -235,6 +283,10 @@ impl MonitorForm {
                 Ok(n) if (min..=max).contains(&n) => Ok(n),
                 _ => Err(format!("{field} must be a number between {min} and {max}")),
             }
+        };
+        // Fields hidden for the chosen type are not submitted, so empty values fall back to defaults.
+        let timing = |v: &str, field: &str, min: i64, max: i64, default: i64| {
+            if v.trim().is_empty() { Ok(default) } else { num(v, field, min, max) }
         };
         let name = self.name.trim().to_string();
         if name.is_empty() || name.chars().count() > 100 {
@@ -279,20 +331,20 @@ impl MonitorForm {
                 }
                 dns::parse_server(&self.dns_server)?;
             }
-            MonitorKind::Push => {}
+            MonitorKind::Push | MonitorKind::Aggregate => {}
         }
         Ok(MonitorInput {
             name,
             kind: kind.as_str().into(),
-            target: if kind == MonitorKind::Push { String::new() } else { target },
+            target: if matches!(kind, MonitorKind::Push | MonitorKind::Aggregate) { String::new() } else { target },
             port,
             method,
             headers: self.headers.trim().to_string(),
             body: self.body.clone(),
-            interval_s: num(&self.interval_s, "Interval", 5, 7 * 86400)?,
-            retry_interval_s: num(&self.retry_interval_s, "Retry interval", 5, 7 * 86400)?,
-            timeout_s: num(&self.timeout_s, "Timeout", 1, 300)?,
-            failure_threshold: num(&self.failure_threshold, "Failures before down", 1, 100)?,
+            interval_s: timing(&self.interval_s, "Interval", 5, 7 * 86400, 60)?,
+            retry_interval_s: timing(&self.retry_interval_s, "Retry interval", 5, 7 * 86400, 60)?,
+            timeout_s: timing(&self.timeout_s, "Timeout", 1, 300, 30)?,
+            failure_threshold: timing(&self.failure_threshold, "Failures before down", 1, 100, 3)?,
             expected_status: self.expected_status.trim().to_string(),
             ip_family: IpFamily::parse(&self.ip_family).as_str().into(),
             follow_redirects: self.follow_redirects.is_some(),
@@ -304,7 +356,7 @@ impl MonitorForm {
                 MonitorKind::Dns => self.dns_expected.trim().to_string(),
                 _ => String::new(),
             },
-            ssl_warn_days: num(&self.ssl_warn_days, "Certificate warning days", 0, 365)?,
+            ssl_warn_days: timing(&self.ssl_warn_days, "Certificate warning days", 0, 365, 14)?,
             dns_record_type: self.dns_record_type.clone(),
             dns_server: self.dns_server.trim().to_string(),
             active: self.active.is_some(),
@@ -319,6 +371,10 @@ impl MonitorForm {
                     return Err("Public name is limited to 100 characters".into());
                 }
                 p.to_string()
+            },
+            parent_id: match self.parent_id.trim() {
+                "" => None,
+                p => Some(p.parse().map_err(|_| "Unknown parent monitor")?),
             },
         })
     }
@@ -339,6 +395,7 @@ struct MonitorFormPage {
     error: Option<String>,
     channels: Vec<ChannelOption>,
     groups: Vec<MonitorGroup>,
+    parents: Vec<(i64, String)>,
     kinds: Vec<(&'static str, &'static str)>,
     record_types: Vec<&'static str>,
 }
@@ -358,6 +415,12 @@ async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: Monito
         error,
         channels,
         groups: store::groups::list(st.db()).await?,
+        parents: store::monitors::list(st.db())
+            .await?
+            .into_iter()
+            .filter(|m| m.parent_id.is_none() && Some(m.id) != id)
+            .map(|m| (m.id, m.name))
+            .collect(),
         kinds: MonitorKind::ALL.iter().map(|k| (k.as_str(), k.label())).collect(),
         record_types: dns::RECORD_TYPES.to_vec(),
     };
@@ -370,7 +433,8 @@ pub async fn new_monitor(State(st): State<AppState>, user: CurrentUser) -> AppRe
     form_page(&st, &user, None, f, None).await
 }
 
-async fn validate_with_groups(st: &AppState, f: &MonitorForm) -> AppResult<Result<MonitorInput, String>> {
+/// Checks references to other rows; only one level of nesting is allowed.
+async fn validate_with_groups(st: &AppState, f: &MonitorForm, editing: Option<i64>) -> AppResult<Result<MonitorInput, String>> {
     let input = match f.validate() {
         Ok(i) => i,
         Err(e) => return Ok(Err(e)),
@@ -380,12 +444,27 @@ async fn validate_with_groups(st: &AppState, f: &MonitorForm) -> AppResult<Resul
     {
         return Ok(Err("That group no longer exists".into()));
     }
+    if let Some(p) = input.parent_id {
+        let all = store::monitors::list(st.db()).await?;
+        let Some(parent) = all.iter().find(|m| m.id == p) else {
+            return Ok(Err("The parent monitor no longer exists".into()));
+        };
+        if Some(p) == editing {
+            return Ok(Err("A monitor cannot be its own parent".into()));
+        }
+        if parent.parent_id.is_some() {
+            return Ok(Err("The parent is itself a sub-monitor; only one level of nesting is supported".into()));
+        }
+        if editing.is_some_and(|id| all.iter().any(|m| m.parent_id == Some(id))) {
+            return Ok(Err("This monitor has sub-monitors, so it cannot be placed under another one".into()));
+        }
+    }
     Ok(Ok(input))
 }
 
 pub async fn create_monitor(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MonitorForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let input = match validate_with_groups(&st, &f).await? {
+    let input = match validate_with_groups(&st, &f, None).await? {
         Ok(i) => i,
         Err(e) => return form_page(&st, &user, None, f, Some(e)).await,
     };
@@ -404,7 +483,7 @@ pub async fn edit_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
 pub async fn update_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<MonitorForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::monitors::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
-    let input = match validate_with_groups(&st, &f).await? {
+    let input = match validate_with_groups(&st, &f, Some(id)).await? {
         Ok(i) => i,
         Err(e) => return form_page(&st, &user, Some(id), f, Some(e)).await,
     };
@@ -440,6 +519,13 @@ pub struct CheckRow {
     pub message: String,
 }
 
+pub struct ChildRow {
+    pub id: i64,
+    pub name: String,
+    pub status_class: &'static str,
+    pub status_label: &'static str,
+}
+
 pub struct IncidentRow {
     pub started: String,
     pub duration: String,
@@ -469,6 +555,8 @@ struct DetailPage {
     push_url: Option<String>,
     channels: Vec<String>,
     group: Option<String>,
+    parent: Option<(i64, String)>,
+    children: Vec<ChildRow>,
     bars: Vec<Bar>,
     incidents: Vec<IncidentRow>,
     checks: Vec<CheckRow>,
@@ -537,6 +625,22 @@ pub async fn monitor_detail(
             message: b.message.clone(),
         })
         .collect();
+    let all = store::monitors::list(db).await?;
+    let latest = store::heartbeats::recent_all(db, 1).await?;
+    let parent = m.parent_id.and_then(|p| all.iter().find(|x| x.id == p)).map(|p| (p.id, p.name.clone()));
+    let children: Vec<ChildRow> = all
+        .iter()
+        .filter(|x| x.parent_id == Some(id))
+        .map(|x| {
+            let st = latest.get(&x.id).and_then(|b| b.last()).map(|b| b.status());
+            let (status_class, status_label) = match (x.active, st) {
+                (false, _) => ("s-paused", "Paused"),
+                (true, None) => ("s-none", "Waiting"),
+                (true, Some(s)) => (views::status_class(s), views::status_label(s)),
+            };
+            ChildRow { id: x.id, name: x.name.clone(), status_class, status_label }
+        })
+        .collect();
     let push_url = m.push_token.as_ref().filter(|_| m.kind() == MonitorKind::Push).map(|t| format!("{}/api/push/{t}?status=up&msg=OK", origin(&st, &headers)));
     let page = DetailPage {
         layout: Layout::admin(&m.name, &user, "monitors").with_notice(q.notice.as_deref()),
@@ -560,6 +664,8 @@ pub async fn monitor_detail(
             Some(g) => store::groups::list(db).await?.into_iter().find(|x| x.id == g).map(|x| x.name),
             None => None,
         },
+        parent,
+        children,
         bars: views::heartbeat_bars(&oldest_first, 60),
         incidents,
         checks,
@@ -606,6 +712,38 @@ mod tests {
         let push = form("push", "ignored").validate().unwrap();
         assert_eq!(push.target, "");
         assert!(form("smoke-signal", "x").validate().is_err());
+    }
+
+    #[test]
+    fn hidden_fields_fall_back_to_defaults() {
+        // What the browser sends for a TCP monitor: HTTP-only and timing fields are disabled.
+        let f = MonitorForm {
+            name: "db".into(),
+            kind: "tcp".into(),
+            host: "db.local".into(),
+            port: "5432".into(),
+            ssl_warn_days: String::new(),
+            retry_interval_s: String::new(),
+            timeout_s: String::new(),
+            ..MonitorForm::default()
+        };
+        let i = f.validate().unwrap();
+        assert_eq!((i.ssl_warn_days, i.retry_interval_s, i.timeout_s), (14, 60, 30));
+        let bad = MonitorForm { interval_s: "abc".into(), ..f };
+        assert!(bad.validate().is_err(), "typed garbage is still rejected");
+    }
+
+    #[test]
+    fn aggregate_needs_no_target_or_timing() {
+        let f = MonitorForm {
+            name: "API".into(),
+            kind: "aggregate".into(),
+            interval_s: String::new(),
+            failure_threshold: String::new(),
+            ..MonitorForm::default()
+        };
+        let i = f.validate().unwrap();
+        assert_eq!((i.kind.as_str(), i.target.as_str()), ("aggregate", ""));
     }
 
     #[test]

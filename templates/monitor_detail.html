@@ -3,7 +3,7 @@
 {% block content %}
 <section class="page-head fade" data-monitor="{{ m.id }}">
   <div>
-    <p class="crumbs"><a href="/admin">monitors</a> /</p>
+    <p class="crumbs"><a href="/admin">monitors</a> /{% if let Some((pid, pname)) = parent %} <a href="/admin/monitors/{{ pid }}">{{ pname }}</a> /{% endif %}</p>
     <h1>{{ m.name }}</h1>
     <p class="target">{{ kind_label }} · {{ target }}{% if m.ip_family != "auto" %} · {% if m.ip_family == "v4" %}IPv4 only{% else %}IPv6 only{% endif %}{% endif %}</p>
     <p><span class="status big {{ status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ status_label }}</span></span></p>
@@ -21,6 +21,17 @@
   </div>
 </section>
 
+{% if !children.is_empty() %}
+<section class="fade">
+  <h3>Sub-monitors</h3>
+  <div class="list">
+    {% for c in children %}
+    <div class="list-row" data-monitor="{{ c.id }}"><span class="status {{ c.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ c.status_label }}</span></span><a class="grow" href="/admin/monitors/{{ c.id }}">{{ c.name }}</a></div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% if m.kind != "aggregate" %}
 <section class="fade"><div class="beats wide" data-monitor-beats="{{ m.id }}">{% for b in bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</div></section>
 
 <section class="stats fade">
@@ -60,6 +71,8 @@
   {% endif %}
 </section>
 
+{% endif %}
+
 <section class="grid2 fade">
   <div class="card">
     <h3>Incidents</h3>
@@ -85,6 +98,7 @@
   </div>
 </section>
 
+{% if m.kind != "aggregate" %}
 <section class="card fade">
   <h3>Recent checks</h3>
   <div class="table-wrap">
@@ -98,4 +112,5 @@
   </table>
   </div>
 </section>
+{% endif %}
 {% endblock %}

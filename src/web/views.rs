@@ -1,7 +1,7 @@
 use crate::models::{Heartbeat, Status};
 use crate::util::{DAY_MS, format_ms, format_pct, format_ts};
 
-use super::{ASSET_VERSION, CurrentUser};
+use super::{CurrentUser, asset_version};
 use crate::app::Branding;
 
 pub struct Layout {
@@ -27,7 +27,7 @@ impl Layout {
             csrf: String::new(),
             nav: "",
             notice: None,
-            asset_version: ASSET_VERSION,
+            asset_version: asset_version(),
         }
     }
 
@@ -64,9 +64,48 @@ pub fn status_label(s: Status) -> &'static str {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Bar {
     pub class: &'static str,
     pub title: String,
+}
+
+fn bar_severity(class: &str) -> u8 {
+    match class {
+        "s-down" | "b-down" => 4,
+        "s-pending" | "b-partial" => 3,
+        "s-maint" | "b-minor" => 2,
+        "s-up" | "b-up" => 1,
+        _ => 0,
+    }
+}
+
+/// Combines equally long bar strips slot by slot, keeping the most severe bar of each slot.
+pub fn worst_bars(strips: &[&[Bar]]) -> Vec<Bar> {
+    let len = strips.iter().map(|s| s.len()).max().unwrap_or(0);
+    (0..len)
+        .map(|i| {
+            strips
+                .iter()
+                .filter_map(|s| i.checked_sub(len - s.len()).and_then(|j| s.get(j)))
+                .max_by_key(|b| bar_severity(b.class))
+                .cloned()
+                .unwrap_or(Bar { class: "hb-empty", title: String::new() })
+        })
+        .collect()
+}
+
+/// Moves rows under their parent row; rows whose parent is missing stay at the top level.
+pub fn nest<T>(rows: Vec<T>, id: impl Fn(&T) -> i64, parent: impl Fn(&T) -> Option<i64>, children: impl Fn(&mut T) -> &mut Vec<T>) -> Vec<T> {
+    let ids: std::collections::HashSet<i64> = rows.iter().map(&id).collect();
+    let (kids, mut top): (Vec<T>, Vec<T>) = rows.into_iter().partition(|r| parent(r).is_some_and(|p| ids.contains(&p)));
+    for kid in kids {
+        let p = parent(&kid).expect("partitioned on parent");
+        if let Some(row) = top.iter_mut().find(|r| id(r) == p) {
+            children(row).push(kid);
+        }
+    }
+    top
 }
 
 pub fn heartbeat_bars(beats: &[Heartbeat], slots: usize) -> Vec<Bar> {
@@ -173,6 +212,33 @@ mod tests {
         let days = BTreeMap::from([(today, (99, 100)), (today - 2 * DAY_MS, (10, 10))]);
         let bars = daily_bars(&days, today, 3);
         assert_eq!(bars.iter().map(|b| b.class).collect::<Vec<_>>(), vec!["b-up", "b-none", "b-minor"]);
+    }
+
+    #[test]
+    fn worst_bars_keep_the_most_severe_slot() {
+        let b = |c: &'static str| Bar { class: c, title: c.into() };
+        let a = [b("s-up"), b("s-up"), b("hb-empty")];
+        let c = [b("s-pending"), b("s-up"), b("s-up")];
+        let d = [b("s-up"), b("s-down"), b("s-up")];
+        let out: Vec<_> = worst_bars(&[&a, &c, &d]).into_iter().map(|b| b.class).collect();
+        assert_eq!(out, vec!["s-pending", "s-down", "s-up"]);
+        let days = [b("b-none"), b("b-minor")];
+        let more = [b("b-up"), b("b-up")];
+        assert_eq!(worst_bars(&[&days, &more]).into_iter().map(|b| b.class).collect::<Vec<_>>(), vec!["b-up", "b-minor"]);
+    }
+
+    #[test]
+    fn nesting_attaches_children_and_keeps_orphans() {
+        #[derive(Debug, PartialEq)]
+        struct R {
+            id: i64,
+            parent: Option<i64>,
+            kids: Vec<R>,
+        }
+        let r = |id, parent| R { id, parent, kids: vec![] };
+        let out = nest(vec![r(1, None), r(2, Some(1)), r(3, Some(99)), r(4, Some(1))], |x| x.id, |x| x.parent, |x| &mut x.kids);
+        assert_eq!(out.iter().map(|x| x.id).collect::<Vec<_>>(), vec![1, 3], "orphan 3 stays top-level");
+        assert_eq!(out[0].kids.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2, 4], "children keep their order");
     }
 
     #[test]

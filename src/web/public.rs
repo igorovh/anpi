@@ -14,7 +14,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use super::views::{self, Bar, Layout, status_label};
 use super::{AppResult, AppState, SESSION_COOKIE, render};
-use crate::models::{Monitor, MonitorGroup, Status};
+use crate::models::{Monitor, MonitorGroup, MonitorKind, Status};
 use crate::monitor::MonitorEvent;
 use crate::monitor::scheduler::PushSignal;
 use crate::stats;
@@ -25,14 +25,57 @@ pub struct PublicMonitor {
     pub id: i64,
     pub name: String,
     pub group_id: Option<i64>,
+    pub parent_id: Option<i64>,
+    pub aggregate: bool,
     pub status: Option<Status>,
     pub status_class: &'static str,
     pub status_label: &'static str,
+    pub up_24h: Option<f64>,
+    pub up_30d: Option<f64>,
     pub uptime_24h: String,
     pub uptime_30d: String,
     pub latency_ms: Option<f64>,
     pub last_check: Option<i64>,
     pub bars: Vec<Bar>,
+    pub children: Vec<PublicMonitor>,
+}
+
+fn public_status(active: bool, status: Option<Status>) -> (&'static str, &'static str) {
+    match (active, status) {
+        (false, _) => ("s-paused", "Paused"),
+        (true, None) => ("s-none", "No data"),
+        (true, Some(Status::Pending)) => ("s-pending", "Degraded"),
+        (true, Some(s)) => (views::status_class(s), status_label(s)),
+    }
+}
+
+fn min_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
+    values.flatten().fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.min(b))))
+}
+
+impl PublicMonitor {
+    /// A parent reports the worst of itself and its visible sub-monitors.
+    fn absorb_children(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let own = if self.aggregate { None } else { self.status };
+        if let Some(worst) = Status::worst(own.into_iter().chain(self.children.iter().filter_map(|c| c.status))) {
+            self.status = Some(worst);
+            (self.status_class, self.status_label) = public_status(true, Some(worst));
+        }
+        let own_24 = if self.aggregate { None } else { self.up_24h };
+        let own_30 = if self.aggregate { None } else { self.up_30d };
+        self.up_24h = min_opt(std::iter::once(own_24).chain(self.children.iter().map(|c| c.up_24h)));
+        self.up_30d = min_opt(std::iter::once(own_30).chain(self.children.iter().map(|c| c.up_30d)));
+        self.uptime_24h = format_pct(self.up_24h);
+        self.uptime_30d = format_pct(self.up_30d);
+        let mut strips: Vec<&[Bar]> = self.children.iter().map(|c| c.bars.as_slice()).collect();
+        if !self.aggregate {
+            strips.push(&self.bars);
+        }
+        self.bars = views::worst_bars(&strips);
+    }
 }
 
 pub struct PublicIncident {
@@ -104,32 +147,37 @@ async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
     let up30 = stats::uptime_all(db, now - 30 * DAY_MS).await?;
     let today = floor_day(now);
     let days = stats::buckets_all(db, today - 29 * DAY_MS, DAY_MS).await?;
-    Ok(monitors
+    let rows: Vec<PublicMonitor> = monitors
         .into_iter()
         .map(|m| {
+            let aggregate = m.kind() == MonitorKind::Aggregate;
             let last = latest.get(&m.id).and_then(|v| v.last());
             let status = if m.active { last.map(|b| b.status()) } else { None };
-            let (status_class, status_label) = match (m.active, status) {
-                (false, _) => ("s-paused", "Paused"),
-                (true, None) => ("s-none", "No data"),
-                (true, Some(Status::Pending)) => ("s-pending", "Degraded"),
-                (true, Some(s)) => (views::status_class(s), status_label(s)),
-            };
+            let (status_class, status_label) = public_status(m.active, status);
+            let (u24, u30) = (up24.get(&m.id).copied(), up30.get(&m.id).copied());
             PublicMonitor {
                 id: m.id,
                 name: m.public_label().to_string(),
                 group_id: m.group_id,
+                parent_id: m.parent_id,
+                aggregate,
                 status,
                 status_class,
                 status_label,
-                uptime_24h: format_pct(up24.get(&m.id).copied()),
-                uptime_30d: format_pct(up30.get(&m.id).copied()),
+                up_24h: u24,
+                up_30d: u30,
+                uptime_24h: format_pct(u24),
+                uptime_30d: format_pct(u30),
                 latency_ms: last.and_then(|b| b.total_ms),
                 last_check: last.map(|b| b.ts),
                 bars: views::daily_bars(days.get(&m.id).unwrap_or(&Default::default()), today, 30),
+                children: Vec::new(),
             }
         })
-        .collect())
+        .collect();
+    let mut rows = views::nest(rows, |r| r.id, |r| r.parent_id, |r| &mut r.children);
+    rows.iter_mut().for_each(PublicMonitor::absorb_children);
+    Ok(rows)
 }
 
 pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResult<Html<String>> {
@@ -171,6 +219,8 @@ struct StatusJson {
 #[derive(Serialize)]
 struct MonitorJson {
     id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<i64>,
     name: String,
     group: Option<String>,
     status: &'static str,
@@ -186,23 +236,23 @@ pub async fn status_json(State(st): State<AppState>) -> AppResult<Response> {
     let (_, _, status) = overall(&monitors);
     let groups: std::collections::HashMap<i64, String> =
         store::groups::list(st.db()).await?.into_iter().map(|g| (g.id, g.name)).collect();
-    let body = StatusJson {
-        title: settings.status_title,
-        status,
-        monitors: monitors
-            .into_iter()
-            .map(|m| MonitorJson {
-                id: m.id,
-                group: m.group_id.and_then(|g| groups.get(&g).cloned()),
-                name: m.name,
-                status: m.status.map(Status::as_str).unwrap_or("unknown"),
-                uptime_24h: m.uptime_24h,
-                uptime_30d: m.uptime_30d,
-                latency_ms: m.latency_ms.map(|v| v.round()),
-                last_check: m.last_check,
-            })
-            .collect(),
+    let json = |m: &PublicMonitor, parent: Option<i64>| MonitorJson {
+        id: m.id,
+        parent,
+        group: m.group_id.and_then(|g| groups.get(&g).cloned()),
+        name: m.name.clone(),
+        status: m.status.map(Status::as_str).unwrap_or("unknown"),
+        uptime_24h: m.uptime_24h.clone(),
+        uptime_30d: m.uptime_30d.clone(),
+        latency_ms: m.latency_ms.map(|v| v.round()),
+        last_check: m.last_check,
     };
+    let mut list = Vec::new();
+    for m in &monitors {
+        list.push(json(m, None));
+        list.extend(m.children.iter().map(|c| json(c, Some(m.id))));
+    }
+    let body = StatusJson { title: settings.status_title, status, monitors: list };
     Ok(([(axum::http::header::CACHE_CONTROL, "public, max-age=30"), (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(body))
         .into_response())
 }

@@ -278,3 +278,58 @@ async fn stale_session_cookie_is_not_treated_as_signed_in() {
     let page = c.get("/").await.body;
     assert!(page.contains(">sign in<") && !page.contains(">dashboard<"));
 }
+
+#[tokio::test]
+async fn sub_monitors_roll_up_into_their_parent() {
+    use anpi::models::{MonitorInput, NewHeartbeat, Status, Timings};
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let db = &app.ctx.db;
+
+    let r = c.post("/admin/monitors", &[("csrf", &csrf), ("name", "API"), ("kind", "aggregate"), ("public", "on"), ("active", "on")]).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+    let api = anpi::store::monitors::list(db).await.unwrap()[0].id;
+    assert!(!app.scheduler.is_running(api).await, "aggregates run no checks");
+
+    let child = |name: &str| MonitorInput { public: true, active: true, parent_id: Some(api), ..MonitorInput::http(name, "https://example.com") };
+    let badges = anpi::store::monitors::create(db, &child("Badges")).await.unwrap();
+    let emotes = anpi::store::monitors::create(db, &child("Emotes")).await.unwrap();
+    let beat = |id, status| NewHeartbeat {
+        monitor_id: id, ts: anpi::util::now_ms(), status, status_code: None, timings: Timings::default(),
+        remote_ip: None, message: String::new(), cert_expires_at: None,
+    };
+    anpi::store::heartbeats::insert_batch(db, &[beat(badges, Status::Up), beat(emotes, Status::Pending)]).await.unwrap();
+
+    let page = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    let api_row = &page[page.find(&format!(r#"data-monitor="{api}""#)).unwrap()..];
+    let api_row = &api_row[..api_row.find("</article>").unwrap()];
+    assert!(api_row.contains("Degraded") && api_row.contains("2 components"), "parent shows the worst child: {api_row}");
+    assert!(page.contains(&format!(r#"data-parent="{api}""#)));
+    let json = Client::new(anpi::web::router(app.state.clone())).get("/api/status.json").await.body;
+    assert!(json.contains(&format!(r#""parent":{api}"#)));
+
+    // Only one level of nesting: a child cannot become a parent, and a parent cannot be nested.
+    let nested = c.post("/admin/monitors", &[("csrf", &csrf), ("name", "deep"), ("kind", "aggregate"), ("parent_id", &badges.to_string())]).await;
+    assert!(nested.body.contains("only one level"), "{}", nested.body);
+    let other = anpi::store::monitors::create(db, &MonitorInput::http("Other", "https://example.com")).await.unwrap();
+    let move_parent = c.post(&format!("/admin/monitors/{api}"), &[("csrf", &csrf), ("name", "API"), ("kind", "aggregate"), ("parent_id", &other.to_string())]).await;
+    assert!(move_parent.body.contains("has sub-monitors"), "{}", move_parent.body);
+    let own = c.post(&format!("/admin/monitors/{other}"), &[("csrf", &csrf), ("name", "Other"), ("kind", "aggregate"), ("parent_id", &other.to_string())]).await;
+    assert!(own.body.contains("own parent"), "{}", own.body);
+
+    c.post(&format!("/admin/monitors/{api}/delete"), &[("csrf", &csrf)]).await;
+    let orphan = anpi::store::monitors::get(db, badges).await.unwrap().unwrap();
+    assert_eq!(orphan.parent_id, None, "deleting a parent keeps its sub-monitors");
+    app.scheduler.shutdown().await;
+}
+
+#[tokio::test]
+async fn asset_urls_change_with_their_content() {
+    let app = app(config(&[])).await;
+    let page = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    let v = anpi::web::asset_version();
+    assert_eq!(v.len(), 12);
+    assert!(page.contains(&format!("/static/app.css?v={v}")), "stylesheet URL carries the content hash");
+    assert_ne!(v, env!("CARGO_PKG_VERSION"));
+}

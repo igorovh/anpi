@@ -1,5 +1,21 @@
 {% extends "base.html" %}
 {% block body_attrs %} data-events="/admin/events"{% endblock %}
+
+{% macro row(r, child, last) %}
+  <a class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" href="/admin/monitors/{{ r.id }}"
+     data-monitor="{{ r.id }}"{% if child %} data-parent="{{ r.parent_id.unwrap_or_default() }}"{% endif %}{% if !r.children.is_empty() %} data-aggregate="{{ r.aggregate }}"{% endif %}>
+    <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
+    <span class="mname">
+      <span class="name">{% if !r.children.is_empty() %}<button class="tree-toggle open" type="button" data-toggle="{{ r.id }}" aria-expanded="true" title="Hide sub-monitors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}{{ r.name }}{% if r.public %} <span class="tag" title="Shown on the public status page">public</span>{% endif %}</span>
+      <span class="target">{% if !r.children.is_empty() %}{{ r.children.len() }} sub-monitor{% if r.children.len() != 1 %}s{% endif %}{% else %}{{ r.kind }} · {{ r.target }}{% endif %}</span>
+    </span>
+    <span class="beats" data-role="beats">{% for b in r.bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</span>
+    <span class="metric" data-role="latency" title="Last response time">{{ r.latency }}</span>
+    <span class="metric" title="Uptime, last 24 hours">{{ r.uptime_24h }}</span>
+    <span class="metric cert">{% if let Some((days, class)) = r.cert %}<span class="{{ class }}" title="Certificate expires in">🔒 {{ days }}</span>{% endif %}</span>
+  </a>
+{% endmacro %}
+
 {% block content %}
 <section class="page-head fade">
   <div>
@@ -27,17 +43,8 @@
   {% for (group, rows) in groups %}
   {% if let Some(name) = group %}<div class="group-head">{{ name }} <span class="muted">{{ rows.len() }}</span></div>{% endif %}
   {% for r in rows %}
-  <a class="monitor-row{% if !r.active %} paused{% endif %}" href="/admin/monitors/{{ r.id }}" data-monitor="{{ r.id }}">
-    <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
-    <span class="mname">
-      <span class="name">{{ r.name }}{% if r.public %} <span class="tag" title="Shown on the public status page">public</span>{% endif %}</span>
-      <span class="target">{{ r.kind }} · {{ r.target }}</span>
-    </span>
-    <span class="beats" data-role="beats">{% for b in r.bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</span>
-    <span class="metric" data-role="latency" title="Last response time">{{ r.latency }}</span>
-    <span class="metric" title="Uptime, last 24 hours">{{ r.uptime_24h }}</span>
-    <span class="metric cert">{% if let Some((days, class)) = r.cert %}<span class="{{ class }}" title="Certificate expires in">🔒 {{ days }}</span>{% endif %}</span>
-  </a>
+  {% call row(r, false, false) %}{% endcall %}
+  {% for c in r.children %}{% call row(c, true, loop.last) %}{% endcall %}{% endfor %}
   {% endfor %}
   {% endfor %}
 </section>

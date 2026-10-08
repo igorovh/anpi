@@ -32,7 +32,19 @@ use crate::monitor::scheduler::Scheduler;
 use crate::store;
 
 pub const SESSION_COOKIE: &str = "anpi_session";
-pub const ASSET_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Changes whenever a bundled asset changes, so browsers never keep stale CSS or JS.
+pub fn asset_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let mut joined = String::new();
+        for name in ["app.css", "app.js", "theme.js"] {
+            if let Some(f) = Assets::get(name) {
+                joined.push_str(&hex::encode(f.metadata.sha256_hash()));
+            }
+        }
+        crate::util::sha256_hex(&joined)[..12].to_string()
+    })
+}
 
 #[derive(Clone)]
 pub struct AppState {

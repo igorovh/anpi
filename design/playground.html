@@ -28,6 +28,12 @@
   .pg .actions { display: flex; gap: 6px; margin-top: 12px; }
   .pg textarea { width: 100%; height: 90px; margin-top: 8px; font: 11px ui-monospace, monospace; background: #111; color: #ccc; border: 1px solid #333; display: none; }
   .view[hidden] { display: none !important; }
+  #groups > .group { border-bottom: 1px solid var(--line); }
+  /* Plex JP's tall CJK metrics push Latin text off-centre; trim the box to cap height so flex centring is exact. */
+  .brand-name { text-box: trim-both cap alphabetic; }
+  .timeline .what .tag { margin-left: 0.5rem; }
+  .hero.split { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; text-align: left; }
+  .hero.split .overall { margin-top: 0; }
 </style>
 </head>
 <body>
@@ -53,7 +59,7 @@
   <label>Row padding<input type="range" data-k="pad" min="0.6" max="2" step="0.1"><output></output></label>
   <label>Side padding<input type="range" data-k="side" min="1" max="3" step="0.1"><output></output></label>
   <label class="sel">Side lines<select data-k="frame"><option value="on">on</option><option value="off">off</option></select></label>
-  <label class="sel">Hero align<select data-k="hero"><option value="center">center</option><option value="left">left</option></select></label>
+  <label class="sel">Hero align<select data-k="hero"><option value="split">title left, status right</option><option value="center">center</option><option value="left">left</option></select></label>
   <label class="sel">Nav links<select data-k="nav"><option value="center">center</option><option value="right">right</option></select></label>
   <label class="sel">Group header<select data-k="ghead"><option value="band">shaded band</option><option value="plain">plain text</option><option value="line">text + line</option></select></label>
   <label>Corner radius<input type="range" data-k="radius" min="0" max="10" step="1"><output></output></label>
@@ -144,7 +150,7 @@
   "use strict";
   var DEFAULTS = {
     font: "IBM Plex Sans JP", size: 15, weight: 400, hweight: 500, h1: 2.1, labels: "upper",
-    width: 860, pad: 1.2, side: 2, frame: "on", hero: "center", nav: "center", ghead: "band", radius: 2,
+    width: 860, pad: 1.2, side: 2, frame: "on", hero: "split", nav: "center", ghead: "band", radius: 2,
     palette: "muted", bg: "warm", line: 30, barh: 14, gap: 3, barr: 1, days: 30, theme: "dark", view: "status"
   };
   var KEY = "anpi-playground";
@@ -180,7 +186,9 @@
     return [
       ":root[data-theme] { --bg:" + bg[0] + "; --ink:" + bg[1] + "; --panel:" + bg[2] + "; --raised:" + bg[3] + "; --input:" + bg[2] +
         "; --line:" + line + "; --faint:" + faint + "; --toggle-border:" + faint + "; --muted:" + mix(bg[1], bg[0], 0.45) +
-        "; --up:" + p[0] + "; --down:" + p[1] + "; --pending:" + p[2] + "; --maint:" + p[3] + "; }",
+        "; --up:" + p[0] + "; --down:" + p[1] + "; --pending:" + p[2] + "; --maint:" + p[3] +
+        "; --empty:" + mix(bg[0], bg[1], t === "light" ? 0.3 : 0.2) + "; }",
+      ".b-none, .hb.hb-empty { background: var(--empty); }",
       "html { font-size:" + state.size + "px; }",
       "body { font-family:'" + state.font + "', system-ui, sans-serif; font-weight:" + state.weight + "; }",
       "h1, .service-head h3, .mname .name, .brand { font-weight:" + state.hweight + "; }",
@@ -191,7 +199,7 @@
       ".service { padding-top:" + state.pad + "rem; padding-bottom:" + state.pad + "rem; }",
       ".monitor-row { padding-top:" + (state.pad * 0.7) + "rem; padding-bottom:" + (state.pad * 0.7) + "rem; }",
       ".incidents .group-title { margin-left:-" + state.side + "rem; margin-right:-" + state.side + "rem; }",
-      ".page > .hero { text-align:" + state.hero + "; } .hero .lede { margin-left:" + (state.hero === "center" ? "auto" : "0") + "; }",
+      state.hero === "split" ? "" : ".page > .hero { text-align:" + state.hero + "; } .hero .lede { margin-left:" + (state.hero === "center" ? "auto" : "0") + "; }",
       state.nav === "right" ? ".navbar { grid-template-columns: auto 1fr auto; } .nav { justify-content: flex-end; }" : "",
       state.ghead === "plain" ? ".group-title, .group-head { background: none; border-bottom: 0; padding-top: 1.4rem; padding-bottom: 0.2rem; }" : "",
       state.ghead === "line" ? ".group-title, .group-head { background: none; padding-top: 1.4rem; }" : "",
@@ -267,6 +275,7 @@
 
   function apply() {
     document.documentElement.dataset.theme = state.theme;
+    document.querySelector(".hero").classList.toggle("split", state.hero === "split");
     document.getElementById("knobs").textContent = css();
     document.querySelectorAll(".view").forEach(function (v) { v.hidden = v.dataset.view !== state.view; });
     document.querySelectorAll("#view-seg button").forEach(function (b) { b.classList.toggle("on", b.dataset.view === state.view); });

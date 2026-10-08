@@ -43,9 +43,9 @@
   .sub-count { margin-left: 0.6rem; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
   .service.parent:has(+ .service.child) { border-bottom: 1px dashed var(--line); }
   .service.child { padding-left: calc(var(--side, 2rem) + 1.6rem); position: relative; }
-  .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 0; height: 1.75rem; width: 0.7rem;
+  .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 0; height: 50%; width: 0.7rem;
     border-left: 1px solid var(--faint); border-bottom: 1px solid var(--faint); }
-  .service.child:not(.last)::after { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 1.75rem; bottom: 0; border-left: 1px solid var(--faint); }
+  .service.child:not(.last)::after { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 50%; bottom: 0; border-left: 1px solid var(--faint); }
   .service.child:not(.last) { border-bottom-style: dashed; }
   .service.child h3 { font-weight: 400; }
   .endpoint { margin-left: 0.6rem; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.72rem; color: var(--muted); }

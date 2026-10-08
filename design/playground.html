@@ -41,13 +41,14 @@
   .tree-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
   .tree-toggle.open svg { transform: rotate(90deg); }
   .sub-count { margin-left: 0.6rem; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
-  .subservices { margin: 0.9rem 0 0.1rem 0.5rem; border-left: 1px solid var(--faint); }
-  .service.child { padding: 0.45rem 0 0.45rem 1.1rem; border-bottom: 0; position: relative; }
-  .service.child::before { content: ""; position: absolute; left: 0; top: 1.05rem; width: 0.7rem; border-top: 1px solid var(--faint); }
-  .service.child .service-head { margin-bottom: 0.35rem; }
-  .service.child h3 { font-size: 0.9rem; font-weight: 400; }
-  .service.child .status { font-size: 0.78rem; }
-  .service.child .days { height: max(6px, calc(var(--barh, 14px) * 0.6)); }
+  .service.parent { border-bottom-color: transparent; padding-bottom: 0.9rem; }
+  .service.parent:has(+ .service.child) { border-bottom: 1px dashed var(--line); }
+  .service.child { padding-left: calc(var(--side, 2rem) + 1.6rem); position: relative; }
+  .service.child::before { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 0; height: 1.75rem; width: 0.7rem;
+    border-left: 1px solid var(--faint); border-bottom: 1px solid var(--faint); }
+  .service.child:not(.last)::after { content: ""; position: absolute; left: calc(var(--side, 2rem) + 0.45rem); top: 1.75rem; bottom: 0; border-left: 1px solid var(--faint); }
+  .service.child:not(.last) { border-bottom-style: dashed; }
+  .service.child h3 { font-weight: 400; }
   .endpoint { margin-left: 0.6rem; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.72rem; color: var(--muted); }
   .monitor-row.child { padding-top: 0.5rem; padding-bottom: 0.5rem; }
   .monitor-row.child .mname { padding-left: 1.4rem; position: relative; }
@@ -219,6 +220,7 @@
       ".page > section, .page > form { padding-left:" + state.side + "rem; padding-right:" + state.side + "rem; }",
       ".service, .monitor-row, .group-head, .group-title { padding-left:" + state.side + "rem; padding-right:" + state.side + "rem; }",
       ".service { padding-top:" + state.pad + "rem; padding-bottom:" + state.pad + "rem; }",
+      ".service.child { padding-left: calc(" + state.side + "rem + 1.6rem); }",
       ".monitor-row { padding-top:" + (state.pad * 0.7) + "rem; padding-bottom:" + (state.pad * 0.7) + "rem; }",
       ".incidents .group-title { margin-left:-" + state.side + "rem; margin-right:-" + state.side + "rem; }",
       state.hero === "split" ? "" : ".page > .hero { text-align:" + state.hero + "; } .hero .lede { margin-left:" + (state.hero === "center" ? "auto" : "0") + "; }",
@@ -227,7 +229,7 @@
       state.ghead === "line" ? ".group-title, .group-head { background: none; padding-top: 1.4rem; }" : "",
       upper ? "" : ".group-title, .group-head, h3, .stat .k, .form legend, .checks th { text-transform:none; letter-spacing:0; font-size:0.85rem; }",
       ".btn, .icon-btn, input, select, textarea, .overall, .tag, .nav a, .tabs a, pre.copy { border-radius:" + r + "; }",
-      ":root { --barh:" + state.barh + "px; } .days { height:" + state.barh + "px; gap:" + state.gap + "px; } .day, .hb { border-radius:" + state.barr + "px; }",
+      ":root { --barh:" + state.barh + "px; --side:" + state.side + "rem; } .days { height:" + state.barh + "px; gap:" + state.gap + "px; } .day, .hb { border-radius:" + state.barr + "px; }",
       ".beats { gap:" + Math.max(1, state.gap - 1) + "px; }"
     ].join("\n");
   }
@@ -292,26 +294,21 @@
     return out;
   }
 
-  function serviceHtml(it, seed, child) {
-    var st = statusOf(it), kids = it[3], open = !collapsed[it[0]];
+  function serviceHtml(it, seed, child, last) {
+    var st = statusOf(it), kids = child ? null : it[3], open = !collapsed[it[0]];
     var bars = dayBars(it, seed).map(function (c) { return '<span class="day ' + c + '"></span>'; }).join("");
     var toggle = kids ? '<button class="tree-toggle' + (open ? " open" : "") + '" data-toggle="' + it[0] + '" aria-expanded="' + open +
-      '" title="' + (open ? "Hide" : "Show") + ' endpoints">' +
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : "";
+      '" title="' + (open ? "Hide" : "Show") + ' endpoints"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' : "";
     var meta = kids ? '<span class="sub-count">' + kids.length + " endpoints</span>" : "";
-    var html = '<article class="service' + (child ? " child" : "") + (kids ? " parent" : "") + '"><div class="service-head"><h3>' + toggle + it[0] + meta +
-      (child ? '<span class="endpoint">' + it[4] + "</span>" : "") +
-      '</h3><span class="status ' + CLS[st] + '"><span class="dot"></span>' + LABEL[st] + '</span></div><div class="days">' + bars + "</div>";
-    if (!child) {
-      html += '<div class="days-legend"><span>' + state.days + ' days ago</span><span class="uptime">' + uptimeOf(it).toFixed(2) +
-        "% uptime</span><span>today</span></div>";
-    }
+    var html = '<article class="service' + (child ? " child" + (last ? " last" : "") : "") + (kids ? " parent" : "") + '"><div class="service-head"><h3>' +
+      toggle + it[0] + meta +
+      '</h3><span class="status ' + CLS[st] + '"><span class="dot"></span>' + LABEL[st] + '</span></div><div class="days">' + bars +
+      '</div><div class="days-legend"><span>' + state.days + ' days ago</span><span class="uptime">' + uptimeOf(it).toFixed(2) +
+      "% uptime</span><span>today</span></div></article>";
     if (kids && open) {
-      html += '<div class="subservices">' + kids.map(function (ch, ci) {
-        return serviceHtml(ch, seed * 7 + ci + 1, true);
-      }).join("") + "</div>";
+      kids.forEach(function (ch, ci) { html += serviceHtml(ch, seed * 7 + ci + 1, true, ci === kids.length - 1); });
     }
-    return html + "</article>";
+    return html;
   }
 
   function renderStatus() {

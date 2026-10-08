@@ -11,18 +11,21 @@
     </p>
   </div>
   <div class="actions">
+    <a class="btn" href="/admin/settings#groups">Groups</a>
     <a class="btn" href="/admin/import">Import</a>
     <a class="btn primary" href="/admin/monitors/new">+ New monitor</a>
   </div>
 </section>
 
-{% if rows.is_empty() %}
+{% if empty %}
 <section class="empty fade">
   <p>No monitors yet.</p>
   <p><a class="btn primary" href="/admin/monitors/new">Add your first monitor</a> <span class="muted">or</span> <a href="/admin/import">import from Uptime Kuma</a></p>
 </section>
 {% else %}
 <section class="monitor-list fade">
+  {% for (group, rows) in groups %}
+  {% if let Some(name) = group %}<div class="group-head">{{ name }} <span class="muted">{{ rows.len() }}</span></div>{% endif %}
   {% for r in rows %}
   <a class="monitor-row{% if !r.active %} paused{% endif %}" href="/admin/monitors/{{ r.id }}" data-monitor="{{ r.id }}">
     <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
@@ -35,6 +38,7 @@
     <span class="metric" title="Uptime, last 24 hours">{{ r.uptime_24h }}</span>
     <span class="metric cert">{% if let Some((days, class)) = r.cert %}<span class="{{ class }}" title="Certificate expires in">🔒 {{ days }}</span>{% endif %}</span>
   </a>
+  {% endfor %}
   {% endfor %}
 </section>
 {% endif %}

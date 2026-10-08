@@ -106,6 +106,15 @@
 
   <fieldset>
     <legend>Visibility</legend>
+    <div class="row">
+      <label>Group
+        <select name="group_id">
+          <option value="">No group</option>
+          {% for g in groups %}<option value="{{ g.id }}"{% if f.in_group(g.id) %} selected{% endif %}>{{ g.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="grow">Public name<span class="hint">shown on the status page; empty = same as name</span><input name="public_name" value="{{ f.public_name }}" maxlength="100"></label>
+    </div>
     <div class="row checks-row">
       <label class="check"><input type="checkbox" name="active"{% if f.active.is_some() %} checked{% endif %}> Active</label>
       <label class="check"><input type="checkbox" name="public"{% if f.public.is_some() %} checked{% endif %}> Show on the public status page</label>

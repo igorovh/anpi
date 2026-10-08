@@ -172,9 +172,16 @@ pub struct Monitor {
     pub ssl_notified_expiry: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub group_id: Option<i64>,
+    pub public_name: String,
 }
 
 impl Monitor {
+    /// Name shown on the public status page.
+    pub fn public_label(&self) -> &str {
+        if self.public_name.trim().is_empty() { &self.name } else { self.public_name.trim() }
+    }
+
     pub fn kind(&self) -> MonitorKind {
         MonitorKind::parse(&self.kind).unwrap_or(MonitorKind::Http)
     }
@@ -222,6 +229,8 @@ pub struct MonitorInput {
     pub dns_server: String,
     pub active: bool,
     pub public: bool,
+    pub group_id: Option<i64>,
+    pub public_name: String,
 }
 
 impl MonitorInput {
@@ -334,6 +343,14 @@ pub struct NotificationChannel {
     pub config: String,
     pub active: bool,
     pub is_default: bool,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct MonitorGroup {
+    pub id: i64,
+    pub name: String,
+    pub sort_order: i64,
     pub created_at: i64,
 }
 

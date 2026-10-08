@@ -4,12 +4,9 @@
 
   var toggle = document.getElementById("theme-toggle");
   if (toggle) {
-    var label = function () { toggle.textContent = html.dataset.theme === "dark" ? "light" : "dark"; };
-    label();
     toggle.addEventListener("click", function () {
       html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
       try { localStorage.setItem("anpi-theme", html.dataset.theme); } catch (e) {}
-      label();
     });
   }
 

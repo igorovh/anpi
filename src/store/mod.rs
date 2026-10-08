@@ -1,3 +1,5 @@
+pub mod assets;
+pub mod groups;
 pub mod heartbeats;
 pub mod maintenance;
 pub mod monitors;

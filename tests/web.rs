@@ -170,8 +170,8 @@ async fn responses_carry_security_headers_and_assets_are_embedded() {
     let css = c.get("/static/app.css").await;
     assert_eq!(css.status, StatusCode::OK);
     assert!(css.headers.get("content-type").unwrap().to_str().unwrap().starts_with("text/css"));
-    assert!(css.body.contains("Zen Kaku Gothic New"));
-    assert_eq!(c.get("/static/fonts/zkg-300-latin.woff2").await.status, StatusCode::OK);
+    assert!(css.body.contains("IBM Plex Sans JP"));
+    assert_eq!(c.get("/static/fonts/plex-400-latin.woff2").await.status, StatusCode::OK);
     assert_eq!(c.get("/static/../Cargo.toml").await.status, StatusCode::NOT_FOUND);
     assert_eq!(c.get("/healthz").await.body, "ok");
 }
@@ -191,4 +191,90 @@ async fn kuma_import_through_the_panel_starts_monitors() {
     let bad = c.post("/admin/import", &[("csrf", &csrf), ("json", "{}")]).await;
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     app.scheduler.shutdown().await;
+}
+
+#[tokio::test]
+async fn groups_and_public_names_shape_the_status_page() {
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    for name in ["Website", "API"] {
+        assert_eq!(c.post("/admin/groups", &[("csrf", &csrf), ("name", name)]).await.status, StatusCode::SEE_OTHER);
+    }
+    let groups = anpi::store::groups::list(&app.ctx.db).await.unwrap();
+    let (web, api) = (groups[0].id, groups[1].id);
+    assert_eq!(groups[0].name, "Website", "new groups are appended in order");
+
+    let db = &app.ctx.db;
+    let mk = |name: &str, group: Option<i64>, public_name: &str| anpi::models::MonitorInput {
+        public: true,
+        active: false,
+        group_id: group,
+        public_name: public_name.into(),
+        ..anpi::models::MonitorInput::http(name, "https://example.com")
+    };
+    anpi::store::monitors::create(db, &mk("api-prod-eu-1", Some(api), "Public API")).await.unwrap();
+    anpi::store::monitors::create(db, &mk("landing", Some(web), "")).await.unwrap();
+    anpi::store::monitors::create(db, &mk("loose", None, "")).await.unwrap();
+
+    // Moving API above Website through the panel reorders the page.
+    let r = c.post(&format!("/admin/groups/{api}"), &[("csrf", &csrf), ("name", "Public API group"), ("sort_order", "1")]).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+
+    let page = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert!(!page.contains("api-prod-eu-1"), "internal names stay private");
+    let pos = |s: &str| page.find(s).unwrap_or_else(|| panic!("{s} missing"));
+    assert!(pos("Public API group") < pos("Website") && pos("Website") < pos("Other"), "groups follow sort order, ungrouped last");
+    assert!(pos("Public API") < pos("landing") && pos("landing") < pos("loose"));
+
+    let json = Client::new(anpi::web::router(app.state.clone())).get("/api/status.json").await.body;
+    assert!(json.contains(r#""group":"Public API group""#), "{json}");
+
+    c.post(&format!("/admin/groups/{web}/delete"), &[("csrf", &csrf)]).await;
+    let landing = anpi::store::monitors::list(db).await.unwrap().into_iter().find(|m| m.name == "landing").unwrap();
+    assert_eq!(landing.group_id, None, "deleting a group keeps its monitors");
+}
+
+#[tokio::test]
+async fn site_name_and_logo_can_be_changed_safely() {
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+
+    c.post("/admin/branding", &[("csrf", &csrf), ("site_name", "igorovh status")]).await;
+    let page = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert!(page.contains("<title>Service status · igorovh status</title>"));
+    assert!(page.contains("powered by"), "footer credit stays");
+
+    let fake = c.post_multipart("/admin/branding/logo", &[("csrf", &csrf)], ("logo", "logo.png", b"<html><script>alert(1)</script>")).await;
+    assert_eq!(fake.status, StatusCode::BAD_REQUEST, "type comes from the bytes, not the file name");
+    let no_csrf = c.post_multipart("/admin/branding/logo", &[], ("logo", "l.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>")).await;
+    assert_eq!(no_csrf.status, StatusCode::FORBIDDEN);
+    let big = vec![0x89u8; 600 * 1024];
+    assert_ne!(c.post_multipart("/admin/branding/logo", &[("csrf", &csrf)], ("logo", "big.png", &big)).await.status, StatusCode::SEE_OTHER);
+
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script><circle r='4'/></svg>";
+    let ok = c.post_multipart("/admin/branding/logo", &[("csrf", &csrf)], ("logo", "logo.svg", svg)).await;
+    assert_eq!(ok.status, StatusCode::SEE_OTHER, "{}", ok.body);
+
+    let mut anon = Client::new(anpi::web::router(app.state.clone()));
+    let page = anon.get("/").await.body;
+    let src_start = page.find("/brand/logo?v=").expect("logo in header");
+    let src: String = page[src_start..].chars().take_while(|c| *c != '"').collect();
+    let logo = anon.get(&src).await;
+    assert_eq!(logo.headers.get("content-type").unwrap(), "image/svg+xml");
+    assert!(logo.headers.get("content-security-policy").unwrap().to_str().unwrap().contains("sandbox"), "scripts in SVG cannot run");
+
+    c.post("/admin/branding/logo/delete", &[("csrf", &csrf)]).await;
+    assert_eq!(anon.get("/brand/logo").await.status, StatusCode::NOT_FOUND);
+    assert!(anon.get("/").await.body.contains("&gt;^&lt;"), "falls back to the bird");
+}
+
+#[tokio::test]
+async fn stale_session_cookie_is_not_treated_as_signed_in() {
+    let app = app(config(&[])).await;
+    let mut c = Client::new(anpi::web::router(app.state.clone()));
+    c.cookies.insert(anpi::web::SESSION_COOKIE.into(), "expired-or-forged".into());
+    let page = c.get("/").await.body;
+    assert!(page.contains(">sign in<") && !page.contains(">dashboard<"));
 }

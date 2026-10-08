@@ -118,11 +118,19 @@ pub struct UserRow {
     pub is_me: bool,
 }
 
+pub struct GroupRow {
+    pub id: i64,
+    pub name: String,
+    pub sort_order: i64,
+    pub monitors: usize,
+}
+
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsPage {
     layout: Layout,
     s: AppSettings,
+    groups: Vec<GroupRow>,
     users: Vec<UserRow>,
     sso: bool,
     error: Option<String>,
@@ -146,10 +154,17 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
         })
         .collect();
     let pages: (i64,) = sqlx::query_as("SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()").fetch_one(st.db()).await?;
+    let monitors = store::monitors::list(st.db()).await?;
+    let groups = store::groups::list(st.db())
+        .await?
+        .into_iter()
+        .map(|g| GroupRow { monitors: monitors.iter().filter(|m| m.group_id == Some(g.id)).count(), id: g.id, name: g.name, sort_order: g.sort_order })
+        .collect();
     let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
     let page = SettingsPage {
         layout: Layout::admin("Settings", user, "settings").with_notice(notice),
         s,
+        groups,
         users,
         sso: st.oidc.is_some(),
         error,

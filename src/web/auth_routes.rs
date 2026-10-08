@@ -41,7 +41,7 @@ pub struct NextQuery {
 }
 
 fn login_page_response(st: &AppState, status: StatusCode, next: &str, username: &str, error: Option<String>) -> AppResult<Response> {
-    let page = LoginPage { layout: Layout::bare("Sign in"), sso: st.oidc.is_some(), next: next.into(), username: username.into(), error };
+    let page = LoginPage { layout: Layout::bare(&st.ctx.branding(), "Sign in"), sso: st.oidc.is_some(), next: next.into(), username: username.into(), error };
     Ok((status, render(&page)?).into_response())
 }
 
@@ -100,7 +100,7 @@ pub async fn setup_page(State(st): State<AppState>) -> AppResult<Response> {
     if !setup_allowed(&st).await? {
         return Ok(Redirect::to("/login").into_response());
     }
-    Ok(render(&SetupPage { layout: Layout::bare("Set up anpi"), username: String::new(), error: None })?.into_response())
+    Ok(render(&SetupPage { layout: Layout::bare(&st.ctx.branding(), "Set up"), username: String::new(), error: None })?.into_response())
 }
 
 #[derive(Deserialize)]
@@ -116,7 +116,7 @@ pub async fn setup(State(st): State<AppState>, jar: CookieJar, Form(f): Form<Set
         return Ok(Redirect::to("/login").into_response());
     }
     let fail = |msg: &str| -> AppResult<Response> {
-        let page = SetupPage { layout: Layout::bare("Set up anpi"), username: f.username.clone(), error: Some(msg.into()) };
+        let page = SetupPage { layout: Layout::bare(&st.ctx.branding(), "Set up"), username: f.username.clone(), error: Some(msg.into()) };
         Ok((StatusCode::BAD_REQUEST, render(&page)?).into_response())
     };
     let expected = st.setup_code.lock().expect("setup lock").clone();

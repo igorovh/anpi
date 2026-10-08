@@ -1,5 +1,6 @@
 mod admin;
 mod auth_routes;
+mod branding;
 mod channels;
 mod charts;
 mod public;
@@ -109,7 +110,7 @@ struct ErrorPage {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let page = ErrorPage { layout: views::Layout::bare("Error"), code: self.0.as_u16(), message: self.1.clone() };
+        let page = ErrorPage { layout: views::Layout::bare(&crate::app::Branding::default(), "Error"), code: self.0.as_u16(), message: self.1.clone() };
         match page.render() {
             Ok(html) => (self.0, Html(html)).into_response(),
             Err(_) => (self.0, self.1).into_response(),
@@ -129,6 +130,7 @@ pub struct CurrentUser {
     pub csrf: String,
     pub id_token: Option<String>,
     pub token: String,
+    pub brand: crate::app::Branding,
 }
 
 impl CurrentUser {
@@ -148,7 +150,14 @@ impl FromRequestParts<AppState> for CurrentUser {
         if let Some(c) = jar.get(SESSION_COOKIE)
             && let Ok(Some(s)) = store::users::session(state.db(), c.value()).await
         {
-            return Ok(Self { id: s.user_id, username: s.username, csrf: s.csrf, id_token: s.id_token, token: c.value().to_string() });
+            return Ok(Self {
+                id: s.user_id,
+                username: s.username,
+                csrf: s.csrf,
+                id_token: s.id_token,
+                token: c.value().to_string(),
+                brand: state.ctx.branding(),
+            });
         }
         let next = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/admin");
         Err(Redirect::to(&format!("/login?next={}", urlencoding::encode(next))).into_response())
@@ -263,6 +272,16 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/maintenance/{id}/delete", post(settings::delete_maintenance))
         .route("/admin/settings", get(settings::settings_page).post(settings::save_settings))
         .route("/admin/users", post(settings::create_user))
+        .route("/admin/branding", post(branding::save_site_name))
+        .route(
+            "/admin/branding/logo",
+            post(branding::upload_logo).layer(axum::extract::DefaultBodyLimit::max(branding::MAX_LOGO_BYTES + 64 * 1024)),
+        )
+        .route("/admin/branding/logo/delete", post(branding::delete_logo))
+        .route("/admin/groups", post(branding::create_group))
+        .route("/admin/groups/{id}", post(branding::update_group))
+        .route("/admin/groups/{id}/delete", post(branding::delete_group))
+        .route("/brand/logo", get(branding::logo))
         .route("/admin/users/{id}/delete", post(settings::delete_user))
         .route("/admin/account/password", post(settings::change_password))
         .route(

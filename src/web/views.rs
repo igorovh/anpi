@@ -2,10 +2,14 @@ use crate::models::{Heartbeat, Status};
 use crate::util::{DAY_MS, format_ms, format_pct, format_ts};
 
 use super::{ASSET_VERSION, CurrentUser};
+use crate::app::Branding;
 
 pub struct Layout {
     pub title: String,
+    pub site_name: String,
+    pub logo_url: Option<String>,
     pub user: Option<String>,
+    pub signed_in: bool,
     pub csrf: String,
     pub nav: &'static str,
     pub notice: Option<String>,
@@ -13,12 +17,22 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn bare(title: &str) -> Self {
-        Self { title: title.into(), user: None, csrf: String::new(), nav: "", notice: None, asset_version: ASSET_VERSION }
+    pub fn bare(brand: &Branding, title: &str) -> Self {
+        Self {
+            title: title.into(),
+            site_name: brand.site_name.clone(),
+            logo_url: brand.logo_version.map(|v| format!("/brand/logo?v={v}")),
+            user: None,
+            signed_in: false,
+            csrf: String::new(),
+            nav: "",
+            notice: None,
+            asset_version: ASSET_VERSION,
+        }
     }
 
     pub fn admin(title: &str, user: &CurrentUser, nav: &'static str) -> Self {
-        Self { user: Some(user.username.clone()), csrf: user.csrf.clone(), nav, ..Self::bare(title) }
+        Self { user: Some(user.username.clone()), signed_in: true, csrf: user.csrf.clone(), nav, ..Self::bare(&user.brand, title) }
     }
 
     pub fn with_notice(mut self, notice: Option<&str>) -> Self {
@@ -163,7 +177,7 @@ mod tests {
 
     #[test]
     fn unknown_notice_codes_are_ignored() {
-        assert_eq!(Layout::bare("x").with_notice(Some("<script>")).notice, None);
-        assert_eq!(Layout::bare("x").with_notice(Some("saved")).notice.as_deref(), Some("Saved."));
+        assert_eq!(Layout::bare(&Branding::default(), "x").with_notice(Some("<script>")).notice, None);
+        assert_eq!(Layout::bare(&Branding::default(), "x").with_notice(Some("saved")).notice.as_deref(), Some("Saved."));
     }
 }

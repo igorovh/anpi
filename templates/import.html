@@ -4,14 +4,14 @@
   <div>
     <p class="crumbs"><a href="/admin/settings">settings</a> /</p>
     <h1>Import from Uptime Kuma</h1>
-    <p class="muted">In Kuma open Settings → Backup → Export, then pick the file here. Supported: HTTP, keyword, JSON query, TCP port, ping, DNS and push monitors; Discord, Telegram, ntfy, SMTP and webhook notifications.</p>
+    <p class="muted">In Kuma open Settings → Backup → Export, then pick the file here. Groups are kept. Supported: HTTP, keyword, JSON query, TCP port, ping, DNS and push monitors; Discord, Telegram, ntfy, SMTP and webhook notifications.</p>
   </div>
 </section>
 {% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
 {% if let Some(r) = report %}
 <section class="card fade">
   <h3>Done</h3>
-  <p>Imported {{ r.monitors_created }} monitor{% if r.monitors_created != 1 %}s{% endif %} and {{ r.channels_created }} notification channel{% if r.channels_created != 1 %}s{% endif %}.</p>
+  <p>Imported {{ r.monitors_created }} monitor{% if r.monitors_created != 1 %}s{% endif %}, {{ r.channels_created }} notification channel{% if r.channels_created != 1 %}s{% endif %} and {{ r.groups_created }} group{% if r.groups_created != 1 %}s{% endif %}.</p>
   {% if !r.warnings.is_empty() %}<h4>Check these</h4><ul>{% for w in r.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
   {% if !r.skipped.is_empty() %}<h4>Skipped</h4><ul class="muted">{% for s in r.skipped %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}
   <p><a class="btn primary" href="/admin">Go to monitors</a></p>

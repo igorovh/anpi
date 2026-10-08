@@ -21,7 +21,7 @@
   </div>
 </section>
 
-<section class="beats wide fade" data-monitor-beats="{{ m.id }}">{% for b in bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</section>
+<section class="fade"><div class="beats wide" data-monitor-beats="{{ m.id }}">{% for b in bars %}<span class="hb {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}</div></section>
 
 <section class="stats fade">
   <div class="stat"><span class="k">Uptime 24h</span><span class="v">{{ uptime_24h }}</span></div>
@@ -79,7 +79,8 @@
       <dt>Down after</dt><dd>{{ m.failure_threshold }} failed check{% if m.failure_threshold != 1 %}s{% endif %} in a row</dd>
       {% if m.kind == "http" %}<dt>Accepted codes</dt><dd>{{ m.expected_status }}</dd>{% endif %}
       <dt>Notifies</dt><dd>{% if channels.is_empty() %}<span class="muted">nobody</span>{% else %}{{ channels|join(", ") }}{% endif %}</dd>
-      <dt>Public</dt><dd>{% if m.public %}yes{% else %}no{% endif %}</dd>
+      <dt>Group</dt><dd>{% if let Some(g) = group %}{{ g }}{% else %}<span class="muted">none</span>{% endif %}</dd>
+      <dt>Public</dt><dd>{% if m.public %}yes{% if !m.public_name.is_empty() %}, as “{{ m.public_name }}”{% endif %}{% else %}no{% endif %}</dd>
     </dl>
   </div>
 </section>

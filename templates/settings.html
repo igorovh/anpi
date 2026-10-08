@@ -3,6 +3,60 @@
 <section class="page-head fade"><div><h1>Settings</h1></div></section>
 {% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
 
+<section class="card fade">
+  <h3>Branding</h3>
+  <form method="post" action="/admin/branding" class="form">
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+    <div class="row">
+      <label class="grow">Site name<span class="hint">header, footer and browser tab</span><input name="site_name" value="{{ layout.site_name }}" required maxlength="40"></label>
+      <div class="form-actions"><button type="submit" class="btn">Save name</button></div>
+    </div>
+  </form>
+  <div class="logo-row">
+    <div class="logo-preview">{% if let Some(logo) = layout.logo_url %}<img src="{{ logo }}" alt="Current logo">{% else %}<span class="bird">&gt;^&lt;</span>{% endif %}</div>
+    <form method="post" action="/admin/branding/logo" enctype="multipart/form-data" class="form grow">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+      <label>Logo<span class="hint">PNG, SVG, WebP, JPEG or ICO, up to 512 KB; also used as the favicon</span><input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg,image/gif,image/x-icon" required></label>
+      <div class="form-actions">
+        <button type="submit" class="btn">Upload</button>
+      </div>
+    </form>
+    {% if layout.logo_url.is_some() %}
+    <form method="post" action="/admin/branding/logo/delete" class="inline" data-confirm="Remove the logo?">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Remove logo</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card fade" id="groups">
+  <h3>Groups</h3>
+  <p class="muted">Groups organise monitors on the dashboard and the status page. Lower order comes first.</p>
+  <div class="list">
+    {% for g in groups %}
+    <div class="list-row">
+      <form method="post" action="/admin/groups/{{ g.id }}" class="group-edit grow">
+        <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+        <input name="name" value="{{ g.name }}" aria-label="Group name" required maxlength="60">
+        <input name="sort_order" value="{{ g.sort_order }}" aria-label="Order" inputmode="numeric" class="order">
+        <span class="muted nowrap">{{ g.monitors }} monitor{% if g.monitors != 1 %}s{% endif %}</span>
+        <button class="btn small" type="submit">Rename</button>
+      </form>
+      <form method="post" action="/admin/groups/{{ g.id }}/delete" class="inline" data-confirm="Delete group {{ g.name }}? Its monitors become ungrouped.">
+        <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Delete</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  <form method="post" action="/admin/groups" class="form">
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+    <div class="row">
+      <label class="grow">New group<input name="name" placeholder="e.g. Twitch Enhancer" required maxlength="60"></label>
+      <div class="form-actions"><button type="submit" class="btn">Add group</button></div>
+    </div>
+  </form>
+</section>
+
 <form method="post" action="/admin/settings" class="form card fade">
   <input type="hidden" name="csrf" value="{{ layout.csrf }}">
   <h3>Status page</h3>

@@ -9,28 +9,29 @@
   </div>
 </section>
 
-{% if monitors.is_empty() %}
-<p class="empty fade">Nothing is published here yet.</p>
-{% else %}
-<section class="services fade">
-  {% for m in monitors %}
+{% if groups.is_empty() %}
+<section class="empty fade"><p>Nothing is published here yet.</p></section>
+{% endif %}
+{% for g in groups %}
+<section class="group fade">
+  {% if let Some(name) = g.name %}<h2 class="group-title">{{ name }}</h2>{% endif %}
+  {% for m in g.monitors %}
   <article class="service" data-monitor="{{ m.id }}">
     <div class="service-head">
+      <h3>{{ m.name }}</h3>
       <span class="status {{ m.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ m.status_label }}</span></span>
-      <h2>{{ m.name }}</h2>
-      <span class="uptime" title="Uptime in the last 24 hours / 30 days">{{ m.uptime_24h }} <span class="muted">· 30d {{ m.uptime_30d }}</span></span>
     </div>
     <div class="days" aria-label="Daily uptime, last 30 days">
       {% for b in m.bars %}<span class="day {{ b.class }}" title="{{ b.title }}"></span>{% endfor %}
     </div>
-    <div class="days-legend"><span>30 days ago</span><span>today</span></div>
+    <div class="days-legend"><span>30 days ago</span><span class="uptime">{{ m.uptime_30d }} uptime · 24h {{ m.uptime_24h }}</span><span>today</span></div>
   </article>
   {% endfor %}
 </section>
-{% endif %}
+{% endfor %}
 
-<section class="incidents fade">
-  <h3>Recent incidents</h3>
+<section class="incidents fade" id="incidents">
+  <h2 class="group-title">Recent incidents</h2>
   {% if incidents.is_empty() %}
   <p class="muted">No incidents in the last 14 days.</p>
   {% else %}
@@ -44,8 +45,4 @@
   </ul>
   {% endif %}
 </section>
-{% endblock %}
-{% block footer %}
-<span>powered by <a href="https://github.com/igorovh">anpi</a></span>
-<a href="{% if signed_in %}/admin{% else %}/login{% endif %}">{% if signed_in %}dashboard{% else %}sign in{% endif %}</a>
 {% endblock %}

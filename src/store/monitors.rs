@@ -29,8 +29,8 @@ pub async fn create(db: &Db, m: &MonitorInput) -> sqlx::Result<i64> {
         "INSERT INTO monitors (name, kind, target, port, method, headers, body, interval_s, retry_interval_s,
             timeout_s, failure_threshold, expected_status, ip_family, follow_redirects, ignore_tls, content_kind,
             content_value, content_expected, ssl_warn_days, dns_record_type, dns_server, push_token, active, public,
-            created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            created_at, updated_at, group_id, public_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(&m.name)
     .bind(&m.kind)
@@ -58,6 +58,8 @@ pub async fn create(db: &Db, m: &MonitorInput) -> sqlx::Result<i64> {
     .bind(m.public)
     .bind(now)
     .bind(now)
+    .bind(m.group_id)
+    .bind(m.public_name.trim())
     .fetch_one(db)
     .await?;
     Ok(id)
@@ -70,7 +72,7 @@ pub async fn update(db: &Db, id: i64, m: &MonitorInput) -> sqlx::Result<()> {
             ip_family = ?, follow_redirects = ?, ignore_tls = ?, content_kind = ?, content_value = ?,
             content_expected = ?, ssl_warn_days = ?, dns_record_type = ?, dns_server = ?, active = ?, public = ?,
             push_token = CASE WHEN ? = 'push' THEN COALESCE(push_token, ?) ELSE push_token END,
-            updated_at = ?
+            group_id = ?, public_name = ?, updated_at = ?
          WHERE id = ?",
     )
     .bind(&m.name)
@@ -98,6 +100,8 @@ pub async fn update(db: &Db, id: i64, m: &MonitorInput) -> sqlx::Result<()> {
     .bind(m.public)
     .bind(&m.kind)
     .bind(random_token(24))
+    .bind(m.group_id)
+    .bind(m.public_name.trim())
     .bind(now_ms())
     .bind(id)
     .execute(db)

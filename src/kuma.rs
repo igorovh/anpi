@@ -12,6 +12,7 @@ use crate::store;
 #[derive(Debug, Default, PartialEq)]
 pub struct ImportReport {
     pub monitors_created: usize,
+    pub groups_created: usize,
     pub channels_created: usize,
     pub skipped: Vec<String>,
     pub warnings: Vec<String>,
@@ -32,10 +33,12 @@ pub struct ParsedMonitor {
     pub input: MonitorInput,
     pub push_token: Option<String>,
     pub kuma_channel_ids: Vec<i64>,
+    pub kuma_parent: Option<i64>,
 }
 
 #[derive(Debug, Default)]
 pub struct Parsed {
+    pub groups: Vec<(i64, String)>,
     pub channels: Vec<ParsedChannel>,
     pub monitors: Vec<ParsedMonitor>,
     pub skipped: Vec<String>,
@@ -195,6 +198,10 @@ pub fn parse(json: &str) -> Result<Parsed, String> {
                 input.kind = "push".into();
                 push_token = Some(s(m, "pushToken")).filter(|t| !t.is_empty());
             }
+            "group" => {
+                out.groups.push((i(m, "id").unwrap_or(-1), name));
+                continue;
+            }
             other => {
                 out.skipped.push(format!("monitor \"{name}\": unsupported type {other:?}"));
                 continue;
@@ -208,7 +215,7 @@ pub fn parse(json: &str) -> Result<Parsed, String> {
             Some(Value::Array(a)) => a.iter().filter_map(Value::as_i64).collect(),
             _ => vec![],
         };
-        out.monitors.push(ParsedMonitor { input, push_token, kuma_channel_ids });
+        out.monitors.push(ParsedMonitor { input, push_token, kuma_channel_ids, kuma_parent: i(m, "parent") });
     }
     Ok(out)
 }
@@ -227,6 +234,13 @@ fn headers_to_lines(raw: &str) -> String {
 pub async fn import(db: &Db, json: &str) -> Result<ImportReport, String> {
     let parsed = parse(json)?;
     let mut report = ImportReport { skipped: parsed.skipped, warnings: parsed.warnings, ..Default::default() };
+    let mut group_map: HashMap<i64, i64> = HashMap::new();
+    for (kuma_id, name) in parsed.groups {
+        let order = store::groups::next_sort_order(db).await.map_err(|e| e.to_string())?;
+        let id = store::groups::create(db, &name, order).await.map_err(|e| e.to_string())?;
+        group_map.insert(kuma_id, id);
+        report.groups_created += 1;
+    }
     let mut channel_map: HashMap<i64, i64> = HashMap::new();
     for c in parsed.channels {
         let id = store::notifications::create(db, &c.name, c.kind, &c.config.to_json(), c.active, c.is_default)
@@ -235,7 +249,8 @@ pub async fn import(db: &Db, json: &str) -> Result<ImportReport, String> {
         channel_map.insert(c.kuma_id, id);
         report.channels_created += 1;
     }
-    for m in parsed.monitors {
+    for mut m in parsed.monitors {
+        m.input.group_id = m.kuma_parent.and_then(|p| group_map.get(&p).copied());
         let id = store::monitors::create(db, &m.input).await.map_err(|e| e.to_string())?;
         if let Some(token) = m.push_token {
             // Keep Kuma's token so existing cron jobs keep working after switching the host.
@@ -263,7 +278,8 @@ mod tests {
         {"id": 2, "name": "Pager", "active": 1, "config": "{\"type\":\"pagerduty\"}"}
       ],
       "monitorList": [
-        {"id": 10, "name": "Website", "type": "http", "url": "https://example.com", "method": "GET", "interval": 60,
+        {"id": 9, "name": "Production", "type": "group", "interval": 60},
+        {"id": 10, "name": "Website", "type": "http", "parent": 9, "url": "https://example.com", "method": "GET", "interval": 60,
          "retryInterval": 20, "maxretries": 2, "timeout": 48, "active": 1, "ignoreTls": false, "maxredirects": 10,
          "accepted_statuscodes": ["200-299", "301"], "expiryNotification": true,
          "headers": "{\"Authorization\": \"Bearer t\"}", "notificationIDList": {"1": true}},
@@ -327,9 +343,13 @@ mod tests {
     async fn import_links_channels_and_keeps_push_token() {
         let db = crate::db::open_memory().await.unwrap();
         let r = import(&db, SAMPLE).await.unwrap();
-        assert_eq!((r.monitors_created, r.channels_created), (6, 1));
+        assert_eq!((r.monitors_created, r.channels_created, r.groups_created), (6, 1, 1));
         let monitors = store::monitors::list(&db).await.unwrap();
         let web = monitors.iter().find(|m| m.name == "Website").unwrap();
+        let groups = store::groups::list(&db).await.unwrap();
+        assert_eq!(web.group_id, Some(groups[0].id), "Kuma parent becomes the anpi group");
+        assert_eq!(groups[0].name, "Production");
+        assert!(monitors.iter().filter(|m| m.name != "Website").all(|m| m.group_id.is_none()));
         assert_eq!(store::monitors::channel_ids(&db, web.id).await.unwrap().len(), 1);
         assert!(store::monitors::get_by_push_token(&db, "abc123").await.unwrap().is_some());
     }

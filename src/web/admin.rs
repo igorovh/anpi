@@ -10,7 +10,7 @@ use super::charts::{self, PhaseAvg};
 use super::views::{self, Bar, Layout, status_label};
 use super::{AppError, AppResult, AppState, CurrentUser, public, render};
 use crate::checks::{self, content, dns, status_codes::StatusMatcher};
-use crate::models::{ContentKind, IpFamily, Monitor, MonitorInput, MonitorKind, Status};
+use crate::models::{ContentKind, IpFamily, Monitor, MonitorGroup, MonitorInput, MonitorKind, Status};
 use crate::stats;
 use crate::store;
 use crate::util::{DAY_MS, HOUR_MS, format_duration_ms, format_ms, format_pct, format_ts, now_ms};
@@ -23,6 +23,7 @@ pub struct NoticeQuery {
 
 pub struct MonitorRow {
     pub id: i64,
+    pub group_id: Option<i64>,
     pub name: String,
     pub kind: &'static str,
     pub target: String,
@@ -40,7 +41,8 @@ pub struct MonitorRow {
 #[template(path = "dashboard.html")]
 struct DashboardPage {
     layout: Layout,
-    rows: Vec<MonitorRow>,
+    groups: Vec<(Option<String>, Vec<MonitorRow>)>,
+    empty: bool,
     count_up: usize,
     count_down: usize,
     count_other: usize,
@@ -70,6 +72,7 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
         let cert_expiry = beats.iter().rev().find_map(|b| b.cert_expires_at);
         rows.push(MonitorRow {
             id: m.id,
+            group_id: m.group_id,
             name: m.name.clone(),
             kind: m.kind().label(),
             target: m.display_target(),
@@ -83,9 +86,11 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
             public: m.public,
         });
     }
+    let all_groups = store::groups::list(db).await?;
     render(&DashboardPage {
         layout: Layout::admin("Monitors", &user, "monitors").with_notice(q.notice.as_deref()),
-        rows,
+        empty: rows.is_empty(),
+        groups: public::group_monitors(&all_groups, rows, |r| r.group_id),
         count_up,
         count_down,
         count_other,
@@ -126,6 +131,8 @@ pub struct MonitorForm {
     pub active: Option<String>,
     pub public: Option<String>,
     pub channels: Vec<i64>,
+    pub group_id: String,
+    pub public_name: String,
 }
 
 impl Default for MonitorForm {
@@ -166,6 +173,8 @@ impl MonitorForm {
             active: flag(m.active),
             public: flag(m.public),
             channels,
+            group_id: m.group_id.map(|g| g.to_string()).unwrap_or_default(),
+            public_name: m.public_name.clone(),
         }
     }
 
@@ -194,6 +203,8 @@ impl MonitorForm {
             dns_server: m.dns_server.clone(),
             active: m.active,
             public: m.public,
+            group_id: m.group_id,
+            public_name: m.public_name.clone(),
         };
         Self::from_monitor_input(&input, channels)
     }
@@ -204,6 +215,10 @@ impl MonitorForm {
 
     pub fn is_kind(&self, k: &str) -> bool {
         self.kind == k
+    }
+
+    pub fn in_group(&self, id: &i64) -> bool {
+        self.group_id == id.to_string()
     }
 
     pub fn is_method(&self, m: &str) -> bool {
@@ -294,6 +309,17 @@ impl MonitorForm {
             dns_server: self.dns_server.trim().to_string(),
             active: self.active.is_some(),
             public: self.public.is_some(),
+            group_id: match self.group_id.trim() {
+                "" => None,
+                g => Some(g.parse().map_err(|_| "Unknown group")?),
+            },
+            public_name: {
+                let p = self.public_name.trim();
+                if p.chars().count() > 100 {
+                    return Err("Public name is limited to 100 characters".into());
+                }
+                p.to_string()
+            },
         })
     }
 }
@@ -312,6 +338,7 @@ struct MonitorFormPage {
     f: MonitorForm,
     error: Option<String>,
     channels: Vec<ChannelOption>,
+    groups: Vec<MonitorGroup>,
     kinds: Vec<(&'static str, &'static str)>,
     record_types: Vec<&'static str>,
 }
@@ -330,6 +357,7 @@ async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: Monito
         f,
         error,
         channels,
+        groups: store::groups::list(st.db()).await?,
         kinds: MonitorKind::ALL.iter().map(|k| (k.as_str(), k.label())).collect(),
         record_types: dns::RECORD_TYPES.to_vec(),
     };
@@ -342,9 +370,22 @@ pub async fn new_monitor(State(st): State<AppState>, user: CurrentUser) -> AppRe
     form_page(&st, &user, None, f, None).await
 }
 
+async fn validate_with_groups(st: &AppState, f: &MonitorForm) -> AppResult<Result<MonitorInput, String>> {
+    let input = match f.validate() {
+        Ok(i) => i,
+        Err(e) => return Ok(Err(e)),
+    };
+    if let Some(g) = input.group_id
+        && !store::groups::list(st.db()).await?.iter().any(|x| x.id == g)
+    {
+        return Ok(Err("That group no longer exists".into()));
+    }
+    Ok(Ok(input))
+}
+
 pub async fn create_monitor(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MonitorForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let input = match f.validate() {
+    let input = match validate_with_groups(&st, &f).await? {
         Ok(i) => i,
         Err(e) => return form_page(&st, &user, None, f, Some(e)).await,
     };
@@ -363,7 +404,7 @@ pub async fn edit_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
 pub async fn update_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<MonitorForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::monitors::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
-    let input = match f.validate() {
+    let input = match validate_with_groups(&st, &f).await? {
         Ok(i) => i,
         Err(e) => return form_page(&st, &user, Some(id), f, Some(e)).await,
     };
@@ -427,6 +468,7 @@ struct DetailPage {
     cert_date: String,
     push_url: Option<String>,
     channels: Vec<String>,
+    group: Option<String>,
     bars: Vec<Bar>,
     incidents: Vec<IncidentRow>,
     checks: Vec<CheckRow>,
@@ -514,6 +556,10 @@ pub async fn monitor_detail(
         cert_date: cert_expiry.map(format_ts).unwrap_or_default(),
         push_url,
         channels,
+        group: match m.group_id {
+            Some(g) => store::groups::list(db).await?.into_iter().find(|x| x.id == g).map(|x| x.name),
+            None => None,
+        },
         bars: views::heartbeat_bars(&oldest_first, 60),
         incidents,
         checks,

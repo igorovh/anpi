@@ -14,7 +14,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use super::views::{self, Bar, Layout, status_label};
 use super::{AppResult, AppState, SESSION_COOKIE, render};
-use crate::models::{Monitor, Status};
+use crate::models::{Monitor, MonitorGroup, Status};
 use crate::monitor::MonitorEvent;
 use crate::monitor::scheduler::PushSignal;
 use crate::stats;
@@ -24,6 +24,7 @@ use crate::util::{DAY_MS, floor_day, format_duration_ms, format_pct, format_ts, 
 pub struct PublicMonitor {
     pub id: i64,
     pub name: String,
+    pub group_id: Option<i64>,
     pub status: Option<Status>,
     pub status_class: &'static str,
     pub status_label: &'static str,
@@ -41,6 +42,11 @@ pub struct PublicIncident {
     pub ongoing: bool,
 }
 
+pub struct PublicGroup {
+    pub name: Option<String>,
+    pub monitors: Vec<PublicMonitor>,
+}
+
 #[derive(Template)]
 #[template(path = "status.html")]
 struct StatusPage {
@@ -48,9 +54,26 @@ struct StatusPage {
     description: String,
     overall_class: &'static str,
     overall_label: &'static str,
-    monitors: Vec<PublicMonitor>,
+    groups: Vec<PublicGroup>,
     incidents: Vec<PublicIncident>,
-    signed_in: bool,
+}
+
+/// Groups in their configured order; ungrouped monitors come last under "Other" if any groups exist.
+pub fn group_monitors<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl Fn(&T) -> Option<i64>) -> Vec<(Option<String>, Vec<T>)> {
+    let mut buckets: Vec<(Option<i64>, Option<String>, Vec<T>)> =
+        groups.iter().map(|g| (Some(g.id), Some(g.name.clone()), Vec::new())).collect();
+    buckets.push((None, None, Vec::new()));
+    for item in items {
+        let gid = group_of(&item);
+        let idx = buckets.iter().position(|(id, _, _)| *id == gid && gid.is_some()).unwrap_or(buckets.len() - 1);
+        buckets[idx].2.push(item);
+    }
+    let any_grouped = buckets.iter().any(|(id, _, v)| id.is_some() && !v.is_empty());
+    buckets
+        .into_iter()
+        .filter(|(_, _, v)| !v.is_empty())
+        .map(|(id, name, v)| (if id.is_none() && any_grouped { Some("Other".to_string()) } else { name }, v))
+        .collect()
 }
 
 fn overall(monitors: &[PublicMonitor]) -> (&'static str, &'static str, &'static str) {
@@ -74,7 +97,8 @@ fn overall(monitors: &[PublicMonitor]) -> (&'static str, &'static str, &'static 
 async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
     let db = st.db();
     let now = now_ms();
-    let monitors: Vec<Monitor> = store::monitors::list_public(db).await?;
+    let mut monitors: Vec<Monitor> = store::monitors::list_public(db).await?;
+    monitors.sort_by_key(|m| m.public_label().to_lowercase());
     let latest = store::heartbeats::recent_all(db, 1).await?;
     let up24 = stats::uptime_all(db, now - DAY_MS).await?;
     let up30 = stats::uptime_all(db, now - 30 * DAY_MS).await?;
@@ -93,7 +117,8 @@ async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
             };
             PublicMonitor {
                 id: m.id,
-                name: m.name,
+                name: m.public_label().to_string(),
+                group_id: m.group_id,
                 status,
                 status_class,
                 status_label,
@@ -110,6 +135,7 @@ async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
 pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResult<Html<String>> {
     let settings = AppSettings::load(st.db()).await?;
     let monitors = load_public(&st).await?;
+    let all_groups = store::groups::list(st.db()).await?;
     let now = now_ms();
     let incidents = store::heartbeats::public_incidents_since(st.db(), now - 14 * DAY_MS)
         .await?
@@ -122,15 +148,17 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
         })
         .collect();
     let (overall_class, overall_label, _) = overall(&monitors);
-    render(&StatusPage {
-        layout: Layout::bare(&settings.status_title),
-        description: settings.status_description,
-        overall_class,
-        overall_label,
-        monitors,
-        incidents,
-        signed_in: jar.get(SESSION_COOKIE).is_some(),
-    })
+    let groups = group_monitors(&all_groups, monitors, |m| m.group_id)
+        .into_iter()
+        .map(|(name, monitors)| PublicGroup { name, monitors })
+        .collect();
+    let mut layout = Layout::bare(&st.ctx.branding(), &settings.status_title);
+    layout.signed_in = match jar.get(SESSION_COOKIE) {
+        Some(c) => store::users::session(st.db(), c.value()).await?.is_some(),
+        None => false,
+    };
+    layout.nav = "status";
+    render(&StatusPage { layout, description: settings.status_description, overall_class, overall_label, groups, incidents })
 }
 
 #[derive(Serialize)]
@@ -144,6 +172,7 @@ struct StatusJson {
 struct MonitorJson {
     id: i64,
     name: String,
+    group: Option<String>,
     status: &'static str,
     uptime_24h: String,
     uptime_30d: String,
@@ -155,6 +184,8 @@ pub async fn status_json(State(st): State<AppState>) -> AppResult<Response> {
     let settings = AppSettings::load(st.db()).await?;
     let monitors = load_public(&st).await?;
     let (_, _, status) = overall(&monitors);
+    let groups: std::collections::HashMap<i64, String> =
+        store::groups::list(st.db()).await?.into_iter().map(|g| (g.id, g.name)).collect();
     let body = StatusJson {
         title: settings.status_title,
         status,
@@ -162,6 +193,7 @@ pub async fn status_json(State(st): State<AppState>) -> AppResult<Response> {
             .into_iter()
             .map(|m| MonitorJson {
                 id: m.id,
+                group: m.group_id.and_then(|g| groups.get(&g).cloned()),
                 name: m.name,
                 status: m.status.map(Status::as_str).unwrap_or("unknown"),
                 uptime_24h: m.uptime_24h,
@@ -221,4 +253,37 @@ pub fn event_stream(st: &AppState, public_only: bool) -> Sse<impl Stream<Item = 
 
 pub async fn public_events(State(st): State<AppState>) -> impl IntoResponse {
     event_stream(&st, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn g(id: i64, name: &str) -> MonitorGroup {
+        MonitorGroup { id, name: name.into(), sort_order: 0, created_at: 0 }
+    }
+
+    #[test]
+    fn grouping_keeps_group_order_and_puts_ungrouped_last() {
+        let groups = [g(2, "Website"), g(1, "API")];
+        let items = vec![(1, Some(1)), (2, None), (3, Some(2)), (4, Some(99))];
+        let out = group_monitors(&groups, items, |i| i.1);
+        let names: Vec<_> = out.iter().map(|(n, v)| (n.clone(), v.iter().map(|i| i.0).collect::<Vec<_>>())).collect();
+        assert_eq!(
+            names,
+            vec![
+                (Some("Website".into()), vec![3]),
+                (Some("API".into()), vec![1]),
+                (Some("Other".into()), vec![2, 4]),
+            ],
+            "unknown group ids fall back to Other"
+        );
+    }
+
+    #[test]
+    fn without_groups_there_is_no_header() {
+        let out = group_monitors(&[g(1, "Empty")], vec![1, 2], |_| None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, None, "an empty group is hidden and ungrouped items need no header");
+    }
 }

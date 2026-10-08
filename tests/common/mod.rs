@@ -245,6 +245,29 @@ impl Client {
         self.send(req.body(Body::from(body)).unwrap()).await
     }
 
+    pub async fn post_multipart(&mut self, path: &str, fields: &[(&str, &str)], file: (&str, &str, &[u8])) -> Resp {
+        let boundary = "anpi-test-boundary";
+        let mut body = Vec::new();
+        for (k, v) in fields {
+            let part = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n");
+            body.extend_from_slice(part.as_bytes());
+        }
+        let (name, filename, data) = file;
+        let head = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        );
+        body.extend_from_slice(head.as_bytes());
+        body.extend_from_slice(data);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let req = Request::post(path)
+            .header(header::HOST, "localhost")
+            .header(header::COOKIE, self.cookie_header())
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .body(Body::from(body))
+            .unwrap();
+        self.send(req).await
+    }
+
     /// Reads the CSRF token embedded in any admin page.
     pub async fn csrf(&mut self) -> String {
         let page = self.get("/admin/settings").await;

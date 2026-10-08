@@ -90,7 +90,6 @@
   <main class="page view" data-view="status">
     <section class="hero">
       <h1>Enhancer status</h1>
-      <p class="lede">Live status of Twitch Enhancer and related services.</p>
       <div class="overall s-down" id="overall"><span class="dot"></span><span class="overall-label">Partial outage</span></div>
     </section>
     <div id="groups"></div>
@@ -146,7 +145,7 @@
   var DEFAULTS = {
     font: "IBM Plex Sans JP", size: 15, weight: 400, hweight: 500, h1: 2.1, labels: "upper",
     width: 860, pad: 1.2, side: 2, frame: "on", hero: "center", nav: "center", ghead: "band", radius: 2,
-    palette: "muted", bg: "warm", line: 30, barh: 30, gap: 3, barr: 1, days: 30, theme: "dark", view: "status"
+    palette: "muted", bg: "warm", line: 30, barh: 14, gap: 3, barr: 1, days: 30, theme: "dark", view: "status"
   };
   var KEY = "anpi-playground";
   var state = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(KEY) || "{}"));

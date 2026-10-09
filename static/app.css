@@ -101,6 +101,8 @@ strong { font-weight: 600; }
 .powered { display: inline-flex; align-items: center; gap: 0.45rem; letter-spacing: 0.02em; }
 .powered .bird { color: var(--ink); font-size: 0.9rem; }
 .powered strong { color: var(--ink); font-weight: 600; }
+a.powered { color: var(--muted); transition: color 0.2s; }
+a.powered:hover strong { text-decoration: underline; text-underline-offset: 3px; }
 
 .fade { animation: fadeIn 0.6s ease both; }
 .fade:nth-child(2) { animation-delay: 0.05s; }
@@ -261,9 +263,9 @@ input, select, textarea {
 }
 input:hover, select:hover, textarea:hover { border-color: var(--faint); }
 textarea { resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.85rem; }
-input[type="checkbox"] { display: inline-block; width: auto; margin: 0 0.4rem 0 0; accent-color: var(--ink); vertical-align: -0.1em; }
+input[type="checkbox"] { display: inline-block; width: auto; margin: 0; accent-color: var(--ink); vertical-align: -0.1em; }
 input[type="file"] { padding: 0.4rem; }
-.form label.check { display: inline-flex; align-items: center; font-size: 0.9rem; font-weight: 400; color: var(--ink); margin-right: 1.4rem; }
+.form label.check { display: inline-flex; align-items: center; gap: 0 0.4rem; font-size: 0.9rem; font-weight: 400; color: var(--ink); margin-right: 1.4rem; }
 .checks-row { gap: 0.2rem 0; }
 .form-actions { display: flex; gap: 0.6rem; margin: 0.4rem 0 0.9rem; }
 [hidden] { display: none !important; }

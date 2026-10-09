@@ -1,25 +1,29 @@
-# anpi
+<h1 align="center"><code>&gt;^&lt;</code> anpi</h1>
 
-A lightweight uptime monitor written in Rust. One ~10 MB binary with an embedded SQLite database, a web panel, a public status page and alerts. A self-hostable alternative to Uptime Kuma that uses a few MB of RAM.
+<p align="center">
+  A small, self-hosted uptime monitor written in Rust.<br>
+  One ~9&nbsp;MB binary, a few MB of RAM, an embedded SQLite database, a web panel, a public status page and alerts.
+</p>
 
-## Features
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/status-light.png">
+    <img alt="Public status page" src="docs/screenshots/status-dark.png" width="860">
+  </picture>
+</p>
 
-- **Monitors:** HTTP(S), WebSocket (ws/wss, optionally sending a message and checking the reply), TCP port, ping (ICMP), DNS and push (cron heartbeats).
-- **Run check now:** try a monitor's settings from the form before saving; it shows the status, timings and the start of the response.
-- **IPv4 / IPv6 / auto per monitor.** Auto tries every address and records which one answered, so a broken IPv6 path shows up instead of hiding behind a fallback.
-- **Response time broken into phases:** DNS, connect, TLS, server wait and transfer, with 24 h / 7 d / 30 d charts.
-- **Noise control:** a monitor is marked down only after N failures in a row, and checks are retried at a shorter interval while failing.
-- **Response checks:** status code ranges (`200-299, 301, 4xx`), keyword, regex, or a JSONPath value (`$.db.status == ok`).
-- **Certificate expiry warnings** at the configured window, then at 7, 3 and 1 days before expiry.
-- **Alerts** to Discord, Telegram, ntfy, e-mail (SMTP) or any JSON webhook. Each alert fires once per transition: down, back up, or certificate expiring.
-- **Maintenance windows** suppress alerts.
-- **Groups and sub-monitors.** Monitors can be grouped, and one monitor can sit under another, e.g. API endpoints under an "API" aggregate. The parent shows the worst status of its children.
-- **Branding:** your own site name, logo (also used as the favicon) and public display names per monitor.
-- **Public status page at `/`** with 30-day uptime bars and incidents, plus `/api/status.json`.
-- **Live updates** over server-sent events.
-- **Data retention:** raw checks for 24 h, then hourly roll-ups for a year. A few dozen monitors stay well under 100 MB.
-- **Sign-in:** local accounts (argon2) or Keycloak / any OIDC provider. SSO can be set in Settings → Single sign-on or through environment variables. With SSO on, only SSO sign-in is allowed.
-- **Import** from an Uptime Kuma backup JSON.
+## Why anpi
+
+- **Light.** The release binary is about 9 MB and uses roughly 20 MB of RAM with a handful of monitors (2–5 MB inside Docker). There is no Node, no external database and no CDN; fonts and assets are built in.
+- **Tells you *why* something failed.** HTTP checks record DNS, connect, TLS, server-wait and transfer times separately. Auto IP mode shows when IPv6 failed and IPv4 had to take over.
+- **Quiet.** A monitor is only marked down after N failures in a row, and each outage sends one alert when it starts and one when it ends.
+- **Readable.** Every monitor page spells out exactly what is requested and what counts as up, e.g. *GET https://api.example.com/health — JSON $.status equals "ok" — every 60s, every 30s while failing*.
+
+## Screenshots
+
+| Dashboard | Monitor | New monitor |
+|---|---|---|
+| ![Dashboard with groups, sub-monitors and live heartbeat bars](docs/screenshots/dashboard.png) | ![Monitor page with response-time chart split into phases](docs/screenshots/monitor.png) | ![Monitor form with a JSON rule and its plain-language summary](docs/screenshots/monitor-form.png) |
 
 ## Quick start
 
@@ -30,95 +34,137 @@ docker compose up -d
 docker compose logs anpi | grep "setup code"
 ```
 
-Open `http://localhost:3000/setup`, enter the setup code from the log and create the first account. The status page is at `/` and the panel at `/admin`.
+Open `http://localhost:3000/setup` and enter the setup code from the log to create the first account. The code makes sure only someone with server access can claim a fresh instance. Before you deploy, edit `ANPI_BASE_URL` in `docker-compose.yml`; an `https://` URL turns on secure cookies.
 
-### Binary + systemd
+### Binary
 
 ```sh
 cargo build --release
-sudo install -m 755 target/release/anpi /usr/local/bin/anpi
-sudo useradd --system --no-create-home anpi
-sudo install -D -m 600 deploy/anpi.env.example /etc/anpi/anpi.env   # edit it
-sudo cp deploy/anpi.service /etc/systemd/system/
-sudo systemctl enable --now anpi
-journalctl -u anpi | grep "setup code"
+./target/release/anpi            # listens on 0.0.0.0:3000, data in ./data
 ```
 
-The unit listens on `127.0.0.1:3000`; put a reverse proxy (Caddy, nginx) in front for HTTPS.
+### Try it with example data
 
-## Configuration
+```sh
+ANPI_DATA_DIR=/tmp/anpi-demo anpi demo   # groups, sub-monitors and 30 days of history
+ANPI_DATA_DIR=/tmp/anpi-demo anpi
+```
 
-All configuration is through environment variables. Monitors, alerts and retention are managed in the panel.
+The public status page is at `/` and the panel at `/admin`.
 
-| Variable | Default | |
-|---|---|---|
-| `ANPI_BIND` | `0.0.0.0:3000` | Listen address |
-| `ANPI_DATA_DIR` | `./data` | Where `anpi.db` lives (`ANPI_DATABASE` overrides the file path) |
-| `ANPI_BASE_URL` | – | Public URL, e.g. `https://status.example.com`. Required for OIDC; `https` enables secure cookies |
-| `ANPI_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for login rate limiting |
-| `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on parallel checks |
-| `ANPI_LOG` | `info` | Log filter (`debug`, `anpi=debug`, …) |
-| `ANPI_OIDC_ISSUER` | – | e.g. `https://auth.example.com/realms/main`. Enables SSO-only mode |
-| `ANPI_OIDC_CLIENT_ID` | – | |
-| `ANPI_OIDC_CLIENT_SECRET` | – | Omit for public clients |
-| `ANPI_OIDC_REQUIRED_ROLE` | – | Realm role, client role or group the user must have |
-| `ANPI_OIDC_SCOPES` | `openid profile email` | |
+## Monitors
 
-### Keycloak
+| Type | What is checked |
+|---|---|
+| **HTTP(S)** | Method, headers, body; accepted status codes such as `200-299, 301, 4xx`; optional response rule; redirects; certificate expiry |
+| **WebSocket** | `ws://` / `wss://` handshake, optional message to send and a rule for the first reply |
+| **TCP port** | The port accepts a connection |
+| **Ping** | ICMP echo reply |
+| **DNS** | A, AAAA, CNAME, MX, NS, TXT, SOA or CAA record, optional resolver and expected value |
+| **Push** | Your cron job calls a URL; no call within the interval counts as a failure |
+| **Aggregate** | No checks of its own; shows the worst status of the monitors placed under it |
 
-You can set SSO in **Settings → Single sign-on**. The panel refuses to turn it on unless the provider answers, and `anpi disable-sso` switches it off from the server if you get locked out. Environment variables, when set, take precedence and lock the panel section.
+Each monitor has its own interval (default 60 s), retry interval while failing (30 s), timeout, number of failures before it is marked down (3) and IP version (auto, IPv4 only, IPv6 only).
 
-1. Create an OpenID Connect client `anpi` with **Client authentication** on and **Standard flow** enabled.
-2. Set **Valid redirect URIs** to `https://status.example.com/auth/oidc/callback` and **Valid post logout redirect URIs** to `https://status.example.com/`.
-3. Optional: create a realm role such as `monitoring`, assign it to people who may use the panel, and set `ANPI_OIDC_REQUIRED_ROLE=monitoring`. Client roles (`resource_access.anpi.roles`) and groups also work.
+**Response rules.** A response or WebSocket reply can be required to *contain* or *not contain* text, *match a regular expression*, or *have a JSON field*, optionally with a value (`$.status` equals `ok`). The form shows a summary such as *"Up when the status is 200-299 and JSON $.status equals “ok”"*. **Run check now** tries the settings before you save them and shows the status, timings and the start of the response.
 
-PKCE is always used. The ID token is validated for issuer, audience, expiry and nonce. It is fetched directly from the token endpoint over TLS (OIDC Core §3.1.3.7).
+**Groups and sub-monitors.** Drag monitors onto a group header to move them, or onto another monitor to put them underneath, e.g. endpoints under an "API" aggregate. Parents show the worst status of their children, and the status page can collapse them.
 
-### Push monitors
+**Certificates.** HTTPS and WSS monitors warn at the configured window (default 14 days), then at 7, 3 and 1 days before expiry. Each step alerts once, and a renewed certificate starts the sequence again.
 
-The monitor page shows a URL such as:
+## Alerts
+
+Discord, Telegram, ntfy, e-mail (SMTP) and a generic JSON webhook. Add channels under **Notifications**, use **Send test**, then tick them in a monitor's settings. Alerts are sent when a monitor goes down, when it comes back (with the downtime) and when a certificate is about to expire. **Maintenance windows** turn alerts off for chosen monitors; checks keep running and are shown as maintenance.
+
+## Status page and API
+
+`/` lists public monitors by group, with 30-day uptime bars, live updates and recent incidents. Each monitor can have a public name, so internal names stay private. Set the site name and logo under **Settings → Branding**; the logo is also used as the favicon.
+
+`GET /api/status.json` returns the same data for other tools:
+
+```json
+{
+  "title": "Example status",
+  "status": "partial_outage",
+  "monitors": [
+    { "id": 2, "name": "API", "group": "Product", "status": "up", "uptime_24h": "99.94%", "uptime_30d": "99.88%" },
+    { "id": 3, "parent": 2, "name": "Search", "group": "Product", "status": "up", "uptime_24h": "100%", "uptime_30d": "99.94%" }
+  ]
+}
+```
+
+Push monitors show their URL on the monitor page:
 
 ```sh
 curl -fsS "https://status.example.com/api/push/<token>?status=up&msg=OK&ping=1234"
 ```
 
-If no push arrives within the interval, the monitor counts a failure. Send `status=down` to report one explicitly.
+## Sign-in and SSO
 
-### Ping in Docker / systemd
+The first account is created with the setup code from the log. More password accounts can be added under **Settings → Users**.
 
-ICMP needs either `CAP_NET_RAW` (granted in the systemd unit) or unprivileged ICMP sockets via `net.ipv4.ping_group_range`, which Docker enables by default.
+Single sign-on works with Keycloak or any OpenID Connect provider. You can set it under **Settings → Single sign-on** (public URL, issuer, client ID and secret, an optional required role or group) or with environment variables, which take precedence. With SSO on, password sign-in is turned off. The panel will not turn SSO on unless the provider answers, and `anpi disable-sso` on the server turns it off again if you get locked out.
+
+For Keycloak:
+
+1. Create an OpenID Connect client with **Client authentication** and **Standard flow** enabled.
+2. Set **Valid redirect URIs** to `https://status.example.com/auth/oidc/callback` and **Valid post logout redirect URIs** to `https://status.example.com/`.
+3. Optional: require a realm role, client role or group, for example `monitoring`.
+
+PKCE is always used. The ID token's issuer, audience, expiry and nonce are checked, and the login state is bound to the browser that started it.
+
+## Configuration
+
+| Variable | Default | |
+|---|---|---|
+| `ANPI_BIND` | `0.0.0.0:3000` | Listen address |
+| `ANPI_DATA_DIR` | `./data` | Directory for `anpi.db` (`ANPI_DATABASE` sets the file path directly) |
+| `ANPI_BASE_URL` | – | Public URL, e.g. `https://status.example.com`. Used for links and SSO; `https` turns on secure cookies |
+| `ANPI_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for login rate limiting behind a reverse proxy |
+| `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on checks running at once |
+| `ANPI_LOG` | `info` | Log filter, e.g. `debug` or `anpi=debug` |
+| `ANPI_OIDC_ISSUER`, `ANPI_OIDC_CLIENT_ID`, `ANPI_OIDC_CLIENT_SECRET` | – | SSO from the environment; overrides the panel |
+| `ANPI_OIDC_REQUIRED_ROLE`, `ANPI_OIDC_SCOPES` | –, `openid profile email` | |
+
+Everything else is set in the panel.
+
+## Data and retention
+
+Checks are stored for 24 hours, then rolled up into hourly averages kept for a year; closed incidents are kept for a year. All three periods can be changed under **Settings**. Uptime figures and charts read across raw and hourly data, so pruning never changes them. A few dozen monitors stay well under 100 MB, and the current database size is shown in the settings.
+
+## Deployment notes
+
+- **systemd:** `deploy/anpi.service` runs anpi as an unprivileged user with a hardened sandbox; `deploy/anpi.env.example` lists the settings.
+- **Reverse proxy:** put Caddy or nginx in front for HTTPS and set `ANPI_TRUST_PROXY=true`.
+- **IPv6 in Docker:** IPv6 monitors need IPv6 inside the container. Enable it in the Docker daemon or use `network_mode: host`.
+- **Ping:** ICMP needs `CAP_NET_RAW` (granted in the systemd unit) or unprivileged ICMP sockets through `net.ipv4.ping_group_range`, which Docker allows by default.
 
 ## Command line
 
 ```sh
 anpi                          # run the server
+anpi demo                     # fill an empty database with example data
 anpi healthcheck              # exit 0 if the local server is healthy (used by Docker)
-anpi reset-password <user>    # reads a new password from stdin, signs out old sessions
-anpi disable-sso              # turns off SSO configured in the panel
+anpi reset-password <user>    # set a new password from stdin and sign out old sessions
+anpi disable-sso              # turn off SSO configured in the panel
 ```
 
 ## Development
 
 ```sh
-cargo test     # unit + integration tests, all local, no network needed
+cargo test                    # unit and integration tests; everything runs locally
 cargo clippy --all-targets
 ```
 
-The integration tests start real local servers (HTTP, self-signed HTTPS, a webhook receiver and a mock OIDC provider) and check:
+The integration tests start real local servers (HTTP, self-signed HTTPS, a WebSocket echo server, a webhook receiver and a mock OIDC provider). They check that each outage produces exactly one down and one recovery alert, that maintenance and restarts stay quiet, IPv4/IPv6 selection, TLS and certificate handling, retention, CSRF and origin checks, login rate limiting, drag and drop moves and the full SSO flow.
 
-- end-to-end alerting: exactly one down alert and one recovery, no alert during maintenance, no duplicate alert after a restart;
-- the IPv4/IPv6 choice, TLS verification and certificate expiry, timeouts that name the failing phase;
-- that retention never changes uptime numbers;
-- CSRF, origin checks, login rate limiting, session invalidation;
-- the OIDC flow, including state binding, nonce, PKCE and required roles.
-
-## Layout
+`design/playground.html` is a standalone page for trying layout, font and colour changes against the real stylesheet; open it straight from disk.
 
 ```
-src/checks      HTTP client with phase timings, TCP, ping, DNS, content rules
-src/monitor     scheduler, state machine, SSL warning steps, batched writer
+src/checks      HTTP client with phase timings, WebSocket, TCP, ping, DNS, response rules
+src/monitor     scheduler, state machine, certificate warnings, batched writer
 src/notify.rs   alert channels
-src/retention.rs, src/stats.rs   roll-ups and reads across raw + hourly data
-src/auth        passwords, rate limiting, OIDC
-src/web         axum handlers, SVG charts, templates in /templates, assets in /static
+src/stats.rs    reads across raw and hourly data; src/retention.rs rolls up and prunes
+src/auth        passwords, rate limiting, OIDC, SSO settings
+src/web         axum handlers and SVG charts; HTML in templates/, CSS and JS in static/
 ```

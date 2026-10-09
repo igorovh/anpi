@@ -502,7 +502,11 @@ async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: Monito
     let channels = store::notifications::list(st.db())
         .await?
         .into_iter()
-        .map(|c| ChannelOption { id: c.id, name: c.name, kind: c.kind })
+        .map(|c| ChannelOption {
+            id: c.id,
+            name: c.name,
+            kind: crate::notify::KINDS.iter().find(|(k, _)| *k == c.kind).map_or(c.kind.clone(), |(_, l)| l.to_string()),
+        })
         .collect();
     let title = if id.is_some() { "Edit monitor" } else { "New monitor" };
     let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };

@@ -9,7 +9,8 @@ const USAGE: &str = "usage:
   anpi                          start the server
   anpi healthcheck              exit 0 if the local server answers /healthz
   anpi reset-password <user>    set a new password (read from stdin)
-  anpi disable-sso              turn off SSO set in the panel so passwords work again";
+  anpi disable-sso              turn off SSO set in the panel so passwords work again
+  anpi demo                     fill an empty database with example monitors and history";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -33,6 +34,7 @@ async fn main() -> ExitCode {
             None => Err(anyhow::anyhow!(USAGE)),
         },
         Some("disable-sso") => disable_sso(&config).await,
+        Some("demo") => demo(&config).await,
         Some(_) => Err(anyhow::anyhow!(USAGE)),
     };
     match result {
@@ -51,6 +53,13 @@ async fn healthcheck(config: &Config) -> anyhow::Result<()> {
     spec.timeout = Duration::from_secs(5);
     let r = anpi::checks::http::send(&spec).await?;
     anyhow::ensure!(r.status == 200, "unhealthy: HTTP {}", r.status);
+    Ok(())
+}
+
+async fn demo(config: &Config) -> anyhow::Result<()> {
+    let db = anpi::db::open(&config.database_path).await?;
+    let n = anpi::demo::seed(&db).await?;
+    eprintln!("added {n} example monitors with 30 days of history to {}", config.database_path.display());
     Ok(())
 }
 

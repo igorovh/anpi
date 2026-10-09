@@ -3,6 +3,7 @@ pub mod auth;
 pub mod checks;
 pub mod config;
 pub mod db;
+pub mod demo;
 pub mod kuma;
 pub mod models;
 pub mod monitor;

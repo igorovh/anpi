@@ -11,13 +11,21 @@ use super::branding::{sniff_image, validate_site_name, MAX_LOGO_BYTES};
 use crate::app::LOGO_KEY;
 use crate::auth::sso::PanelSso;
 use crate::db::Db;
-use crate::kuma::ImportReport;
 use crate::models::{Monitor, MonitorKind};
 use crate::notify::ChannelConfig;
 use crate::store::{self, settings::AppSettings};
 use crate::util::now_ms;
 
 pub const FORMAT: u32 = 1;
+
+#[derive(Debug, Default, PartialEq)]
+pub struct ImportReport {
+    pub monitors_created: usize,
+    pub groups_created: usize,
+    pub channels_created: usize,
+    pub skipped: Vec<String>,
+    pub warnings: Vec<String>,
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -282,6 +290,9 @@ async fn clear(db: &Db) -> sqlx::Result<()> {
 }
 
 pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, String> {
+    if !is_backup(json) {
+        return Err("This is not an anpi configuration export.".into());
+    }
     let b: Backup = serde_json::from_str(json).map_err(|e| format!("not a valid anpi backup: {e}"))?;
     if b.anpi_export != FORMAT {
         return Err(format!("unsupported backup format {} (this version reads {FORMAT})", b.anpi_export));

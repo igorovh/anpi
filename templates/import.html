@@ -4,7 +4,7 @@
   <div>
     <p class="crumbs"><a href="/admin/settings">settings</a> /</p>
     <h1>Import</h1>
-    <p class="muted">Restore an anpi configuration export, or move from Uptime Kuma (Settings → Backup → Export there). The file type is detected automatically.</p>
+    <p class="muted">Restore a configuration exported from anpi under Settings → Backup.</p>
   </div>
 </section>
 {% if let Some(e) = error %}<p class="error" role="alert">{{ e }}</p>{% endif %}
@@ -21,13 +21,16 @@
   <input type="hidden" name="csrf" value="{{ layout.csrf }}">
   <label>File<input type="file" accept="application/json,.json" data-file-into="import-json"></label>
   <label>…or paste the JSON<textarea name="json" id="import-json" rows="10" spellcheck="false" required></textarea></label>
-  <fieldset>
-    <legend>For anpi exports</legend>
-    <label class="check"><input type="radio" name="mode" value="merge" checked> Add to what is already here <span class="muted">(groups and channels with the same name are reused)</span></label><br>
-    <label class="check"><input type="radio" name="mode" value="replace"> Replace everything</label>
-    <label class="check"><input type="checkbox" name="confirm_replace"> I understand that replacing deletes all current monitors, their history, groups, channels and maintenance windows</label>
+  <fieldset class="choices">
+    <legend>Mode</legend>
+    <label class="choice"><input type="radio" name="mode" value="merge" checked>
+      <span><strong>Add to what is already here</strong><small>Groups and channels with the same name are reused.</small></span></label>
+    <label class="choice"><input type="radio" name="mode" value="replace">
+      <span><strong>Replace everything</strong><small>Deletes all current monitors with their history, groups, channels and maintenance windows first.</small></span></label>
+    <label class="choice confirm"><input type="checkbox" name="confirm_replace">
+      <span>I understand that replacing deletes the current configuration</span></label>
+    <p class="muted small">Imported SSO settings stay switched off until you enable them under Settings, so a file can never lock you out.</p>
   </fieldset>
-  <p class="muted small">Imported SSO settings stay switched off until you enable them under Settings, so a file can never lock you out.</p>
   <div class="form-actions"><button type="submit" class="btn primary">Import</button></div>
 </form>
 {% endif %}

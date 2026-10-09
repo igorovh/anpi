@@ -44,7 +44,7 @@
 {% if empty %}
 <section class="empty fade">
   <p>No monitors yet.</p>
-  <p><a class="btn primary" href="/admin/monitors/new">Add your first monitor</a> <span class="muted">or</span> <a href="/admin/import">import from Uptime Kuma</a></p>
+  <p class="empty-actions"><a class="btn primary" href="/admin/monitors/new">Add your first monitor</a> <span class="muted">or</span> <a href="/admin/import">import a backup</a></p>
 </section>
 {% endif %}
 {% if !empty || groups.len() > 1 %}

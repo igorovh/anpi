@@ -177,20 +177,17 @@ async fn responses_carry_security_headers_and_assets_are_embedded() {
 }
 
 #[tokio::test]
-async fn kuma_import_through_the_panel_starts_monitors() {
+async fn import_rejects_files_that_are_not_anpi_exports() {
     let app = app(config(&[])).await;
     let mut c = signed_in(&app).await;
     let csrf = c.csrf().await;
-    let json = r#"{"monitorList":[{"name":"Imported","type":"http","url":"http://127.0.0.1:9/","interval":60,"active":true}],"notificationList":[]}"#;
-    let r = c.post("/admin/import", &[("csrf", &csrf), ("json", json)]).await;
-    assert_eq!(r.status, StatusCode::OK);
-    assert!(r.body.contains("Imported 1 monitor"), "{}", r.body);
-    let m = &anpi::store::monitors::list(&app.ctx.db).await.unwrap()[0];
-    assert!(app.scheduler.is_running(m.id).await);
-
-    let bad = c.post("/admin/import", &[("csrf", &csrf), ("json", "{}")]).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
-    app.scheduler.shutdown().await;
+    let other = r#"{"monitorList":[{"name":"Imported","type":"http","url":"http://127.0.0.1:9/"}]}"#;
+    for json in [other, "{}", "not json"] {
+        let r = c.post("/admin/import", &[("csrf", &csrf), ("json", json)]).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST);
+        assert!(r.body.contains("not an anpi configuration export"), "{}", r.body);
+    }
+    assert!(anpi::store::monitors::list(&app.ctx.db).await.unwrap().is_empty());
 }
 
 #[tokio::test]

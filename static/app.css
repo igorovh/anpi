@@ -263,7 +263,7 @@ input, select, textarea {
 }
 input:hover, select:hover, textarea:hover { border-color: var(--faint); }
 textarea { resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.85rem; }
-input[type="checkbox"] { display: inline-block; width: auto; margin: 0; accent-color: var(--ink); vertical-align: -0.1em; }
+input[type="checkbox"], input[type="radio"] { display: inline-block; width: auto; margin: 0; accent-color: var(--ink); vertical-align: -0.1em; }
 input[type="file"] { padding: 0.4rem; }
 .form label.check { display: inline-flex; align-items: center; gap: 0 0.4rem; font-size: 0.9rem; font-weight: 400; color: var(--ink); margin-right: 1.4rem; }
 .checks-row { gap: 0.2rem 0; }
@@ -399,3 +399,12 @@ h3 .count { margin-left: 0.4rem; font-weight: 400; letter-spacing: 0; color: var
 .monitor-row .pick { margin: 0; cursor: pointer; accent-color: var(--ink); }
 .monitor-row.picked { background: var(--panel); }
 @media (max-width: 720px) { .page > .bulk-bar { padding: 0.55rem 1.1rem; } }
+
+/* option lists and empty state */
+.form label.choice { display: flex; align-items: flex-start; gap: 0.65rem; margin-bottom: 0.8rem; font-size: 0.9rem; font-weight: 400; color: var(--ink); cursor: pointer; }
+.form label.choice input { margin-top: 0.2em; flex: none; }
+.form label.choice strong { font-weight: 500; }
+.form label.choice small { display: block; margin-top: 0.15rem; font-size: 0.8rem; color: var(--muted); }
+.form label.choice.confirm { margin: -0.2rem 0 1rem 1.6rem; font-size: 0.85rem; }
+.form .choices .small { margin-top: 0.4rem; }
+.empty .empty-actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.8rem; }

@@ -11,8 +11,7 @@ use super::{AppError, AppResult, AppState, CurrentUser, render};
 use crate::auth::oidc::Oidc;
 use crate::auth::password;
 use crate::auth::sso::{PanelSso, SsoSource, normalize_base_url};
-use super::backup;
-use crate::kuma::{self, ImportReport};
+use super::backup::{self, ImportReport};
 use crate::store::{self, settings::AppSettings};
 use crate::util::{format_ts, now_ms, parse_local_datetime};
 
@@ -346,31 +345,28 @@ pub struct ImportForm {
     confirm_replace: Option<String>,
 }
 
-/// Imports an anpi backup or an Uptime Kuma backup, detected from the file itself.
 pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ImportForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let layout = Layout::admin("Import", &user, "settings");
     let fail = |layout, e: String| -> AppResult<Response> {
         Ok((StatusCode::BAD_REQUEST, render(&ImportPage { layout, report: None, error: Some(e) })?).into_response())
     };
-    let result = if backup::is_backup(&f.json) {
-        let replace = f.mode == "replace";
-        if replace && f.confirm_replace.is_none() {
-            return fail(layout, "Tick the confirmation to replace the current configuration.".into());
+    if !backup::is_backup(&f.json) {
+        return fail(layout, "This is not an anpi configuration export.".into());
+    }
+    let replace = f.mode == "replace";
+    if replace && f.confirm_replace.is_none() {
+        return fail(layout, "Tick the confirmation to replace the current configuration.".into());
+    }
+    if replace {
+        for m in store::monitors::list(st.db()).await? {
+            st.scheduler.stop(m.id).await;
         }
-        if replace {
-            for m in store::monitors::list(st.db()).await? {
-                st.scheduler.stop(m.id).await;
-            }
-        }
-        let r = backup::import(st.db(), &f.json, replace).await;
-        st.ctx.reload_branding().await?;
-        st.ctx.reload_auth().await?;
-        st.ctx.maintenance.reload(st.db(), now_ms()).await?;
-        r
-    } else {
-        kuma::import(st.db(), &f.json).await
-    };
+    }
+    let result = backup::import(st.db(), &f.json, replace).await;
+    st.ctx.reload_branding().await?;
+    st.ctx.reload_auth().await?;
+    st.ctx.maintenance.reload(st.db(), now_ms()).await?;
     match result {
         Ok(report) => {
             st.scheduler.start_all_missing().await?;

@@ -35,7 +35,7 @@ PKCE is always used. The ID token's issuer, audience, expiry and nonce are check
 
 **Settings → Backup → Export configuration** downloads one JSON file. It contains monitors with their sub-monitors, groups, notification channels, maintenance windows, settings, the logo and SSO settings. Check history and user accounts are left out. The file holds webhook URLs, passwords and secrets, so keep it private.
 
-**Import** accepts that file or an Uptime Kuma backup and detects which one it is.
+**Import** restores that file:
 - *Add* keeps what is already there and reuses groups and channels with the same name.
 - *Replace* deletes the current monitors with their history, groups, channels and maintenance windows first, after an explicit confirmation.
 - Push tokens are kept, so cron jobs keep working after a move.
@@ -63,7 +63,7 @@ anpi healthcheck              # exit 0 if the local server is healthy (used by D
 anpi reset-password <user>    # set a new password from stdin and sign out old sessions
 anpi disable-sso              # turn off SSO configured in the panel
 anpi export [file]            # write the configuration as JSON (stdout by default)
-anpi import <file> [--replace]  # load an anpi export or an Uptime Kuma backup
+anpi import <file> [--replace]  # load a configuration export
 ```
 
 ## Security notes

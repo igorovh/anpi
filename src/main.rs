@@ -12,7 +12,7 @@ const USAGE: &str = "usage:
   anpi disable-sso              turn off SSO set in the panel so passwords work again
   anpi demo                     fill an empty database with example monitors and history
   anpi export [file]            write the configuration as JSON (stdout by default)
-  anpi import <file> [--replace]  load a configuration export or Uptime Kuma backup";
+  anpi import <file> [--replace]  load a configuration export";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -79,12 +79,7 @@ async fn export(config: &Config, file: Option<&String>) -> anyhow::Result<()> {
 async fn import(config: &Config, file: &str, replace: bool) -> anyhow::Result<()> {
     let json = std::fs::read_to_string(file)?;
     let db = anpi::db::open(&config.database_path).await?;
-    let report = if anpi::web::backup::is_backup(&json) {
-        anpi::web::backup::import(&db, &json, replace).await
-    } else {
-        anpi::kuma::import(&db, &json).await
-    }
-    .map_err(anyhow::Error::msg)?;
+    let report = anpi::web::backup::import(&db, &json, replace).await.map_err(anyhow::Error::msg)?;
     eprintln!(
         "imported {} monitors, {} channels and {} groups; restart anpi to start the new checks",
         report.monitors_created, report.channels_created, report.groups_created

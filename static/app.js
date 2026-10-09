@@ -17,17 +17,42 @@
   });
 
   // Show only the fields that apply to the selected type; hidden ones are disabled so they are not submitted.
+  // Fields follow the chosen type (data-kinds) and other selects (data-when="name:value value").
+  // Anything hidden is disabled so it is not submitted.
   document.querySelectorAll("form[data-kind-form]").forEach(function (form) {
-    var select = form.querySelector("[data-kind-select]");
-    if (!select) return;
+    var kind = form.querySelector("[data-kind-select]");
+    var valueOf = function (name) { var el = form.querySelector('[name="' + name + '"]'); return el ? el.value : ""; };
+    var summary = form.querySelector("[data-rule-summary]");
+    var describe = function () {
+      if (!summary) return;
+      var k = kind.value, rule = valueOf("content_kind"), v = valueOf("content_value").trim(), eq = valueOf("content_expected").trim();
+      if (k !== "http" && k !== "websocket") { summary.textContent = ""; return; }
+      var parts = [];
+      if (k === "http") parts.push("the status is " + (valueOf("expected_status").trim() || "200-299"));
+      else parts.push("the WebSocket handshake succeeds");
+      var q = function (t) { return "\u201c" + (t || "\u2026") + "\u201d"; };
+      var what = k === "http" ? "the body" : "the first reply";
+      if (rule === "contains") parts.push(what + " contains " + q(v));
+      if (rule === "not_contains") parts.push(what + " does not contain " + q(v));
+      if (rule === "regex") parts.push(what + " matches /" + (v || "\u2026") + "/");
+      if (rule === "json_path") parts.push("JSON " + (v || "$.\u2026") + (eq ? " equals " + q(eq) : " exists"));
+      summary.textContent = "Up when " + parts.join(" and ") + ".";
+    };
     var apply = function () {
       form.querySelectorAll("[data-kinds]").forEach(function (el) {
-        var show = el.dataset.kinds.split(" ").indexOf(select.value) !== -1;
-        el.hidden = !show;
-        el.querySelectorAll("input, select, textarea").forEach(function (i) { i.disabled = !show; });
+        el.hidden = el.dataset.kinds.split(" ").indexOf(kind.value) === -1;
       });
+      form.querySelectorAll("[data-when]").forEach(function (el) {
+        var parts = el.dataset.when.split(":");
+        el.hidden = parts[1].split(" ").indexOf(valueOf(parts[0])) === -1;
+      });
+      form.querySelectorAll("input, select, textarea").forEach(function (i) {
+        if (i.type !== "hidden") i.disabled = !!i.closest("[hidden]");
+      });
+      describe();
     };
-    select.addEventListener("change", apply);
+    form.addEventListener("change", apply);
+    form.addEventListener("input", describe);
     apply();
   });
 
@@ -123,6 +148,20 @@
       var el = document.getElementById(b.dataset.hide);
       if (el) el.hidden = true;
     });
+  });
+
+  // Rows are not links so dragging them never drags a URL; they open on click instead.
+  document.querySelectorAll(".monitor-row[data-href]").forEach(function (row) {
+    var open = function (newTab) {
+      if (newTab) window.open(row.dataset.href, "_blank");
+      else window.location.href = row.dataset.href;
+    };
+    row.addEventListener("click", function (e) {
+      if (e.target.closest("button, a")) return;
+      open(e.ctrlKey || e.metaKey);
+    });
+    row.addEventListener("auxclick", function (e) { if (e.button === 1) open(true); });
+    row.addEventListener("keydown", function (e) { if (e.key === "Enter") open(e.ctrlKey || e.metaKey); });
   });
 
   // Drag monitors onto a group to move them, or onto another monitor to nest them.

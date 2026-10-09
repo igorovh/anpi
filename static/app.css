@@ -355,7 +355,10 @@ p.small { font-size: 0.82rem; margin: -0.3rem 0 0.9rem; }
 .page > .drag-hint { padding: 0.55rem 2rem; font-size: 0.8rem; border-bottom: 1px solid var(--line); }
 .new-group { flex-basis: 100%; display: flex; gap: 0.5rem; align-items: center; }
 .new-group input { margin: 0; max-width: 22rem; }
-.monitor-row[draggable="true"] { cursor: grab; }
+.monitor-row[data-href] { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.monitor-row[data-href]:focus-visible { outline: 1px solid var(--ink); outline-offset: -1px; }
+.dragging .monitor-row { cursor: grabbing; }
+.dragging .monitor-row * { pointer-events: none; }
 .monitor-row.is-dragged { opacity: 0.4; }
 .drop-group.drop-over, .monitor-row.drop-over { box-shadow: inset 0 0 0 1px var(--ink); background: var(--raised); }
 .monitor-row.drop-over::after { content: "put underneath"; position: absolute; right: 2rem; font-size: 0.7rem; color: var(--muted); }
@@ -374,3 +377,5 @@ p.small { font-size: 0.82rem; margin: -0.3rem 0 0.9rem; }
 .test-result pre { margin-top: 0.6rem; max-height: 12rem; overflow: auto; padding: 0.6rem; background: var(--input); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-all; }
 .facts dd.pre { white-space: pre-wrap; word-break: break-word; }
 .card-link { margin-top: 1rem; font-size: 0.85rem; }
+.rule-summary { font-size: 0.85rem; color: var(--ink); background: var(--panel); border-left: 2px solid var(--faint); padding: 0.45rem 0.8rem; margin: -0.2rem 0 1rem; }
+.rule-summary:empty { display: none; }

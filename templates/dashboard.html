@@ -2,7 +2,7 @@
 {% block body_attrs %} data-events="/admin/events" data-csrf="{{ layout.csrf }}"{% endblock %}
 
 {% macro row(r, child, last) %}
-  <a class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" href="/admin/monitors/{{ r.id }}" draggable="true"
+  <div class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" data-href="/admin/monitors/{{ r.id }}" role="link" tabindex="0" draggable="true"
      data-monitor="{{ r.id }}" data-name="{{ r.name }}"{% if child %} data-parent="{{ r.parent_id.unwrap_or_default() }}"{% endif %}{% if !r.children.is_empty() %} data-aggregate="{{ r.aggregate }}" data-has-children{% endif %}>
     <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
     <span class="mname">
@@ -13,7 +13,7 @@
     <span class="metric" data-role="latency" title="Last response time">{{ r.latency }}</span>
     <span class="metric" title="Uptime, last 24 hours">{{ r.uptime_24h }}</span>
     <span class="metric cert">{% if let Some((days, class)) = r.cert %}<span class="{{ class }}" title="Certificate expires in">🔒 {{ days }}</span>{% endif %}</span>
-  </a>
+  </div>
 {% endmacro %}
 
 {% block content %}

@@ -69,19 +69,24 @@
   <fieldset data-kinds="http websocket">
     <legend><span data-kinds="http">Expected response</span><span data-kinds="websocket">Expected reply</span></legend>
     <div class="row">
-      <label>Check
+      <label><span data-kinds="http">The response must</span><span data-kinds="websocket">The first reply must</span>
         <select name="content_kind">
-          <option value="none"{% if f.content_kind == "none" %} selected{% endif %}>Nothing more</option>
-          <option value="contains"{% if f.content_kind == "contains" %} selected{% endif %}>Contains text</option>
-          <option value="not_contains"{% if f.content_kind == "not_contains" %} selected{% endif %}>Does not contain text</option>
-          <option value="regex"{% if f.content_kind == "regex" %} selected{% endif %}>Matches regex</option>
-          <option value="json_path"{% if f.content_kind == "json_path" %} selected{% endif %}>JSON field (JSONPath)</option>
+          <option value="none"{% if f.content_kind == "none" %} selected{% endif %}>Just arrive, no content rule</option>
+          <option value="contains"{% if f.content_kind == "contains" %} selected{% endif %}>Contain text</option>
+          <option value="not_contains"{% if f.content_kind == "not_contains" %} selected{% endif %}>Not contain text</option>
+          <option value="regex"{% if f.content_kind == "regex" %} selected{% endif %}>Match a regular expression</option>
+          <option value="json_path"{% if f.content_kind == "json_path" %} selected{% endif %}>Have a JSON field</option>
         </select>
       </label>
-      <label class="grow">Text / pattern / path<span class="hint">e.g. "ok" or $.status</span><input name="content_value" value="{{ f.content_value }}" spellcheck="false"></label>
-      <label>Expected value<span class="hint">JSONPath only; empty = must exist</span><input name="content_expected" value="{{ f.content_expected }}"></label>
+      <label class="grow" data-when="content_kind:contains not_contains regex json_path">
+        <span data-when="content_kind:contains not_contains">Text</span>
+        <span data-when="content_kind:regex">Regular expression<span class="hint">e.g. "status":\s*"ok"</span></span>
+        <span data-when="content_kind:json_path">JSON path<span class="hint">e.g. $.status or $.services[0].healthy</span></span>
+        <input name="content_value" value="{{ f.content_value }}" spellcheck="false">
+      </label>
+      <label data-when="content_kind:json_path">Equal to<span class="hint">optional; empty = the field only has to exist</span><input name="content_expected" value="{{ f.content_expected }}" spellcheck="false"></label>
     </div>
-    <p class="muted small" data-kinds="http">The status code is always checked against “Accepted status codes”.</p>
+    <p class="rule-summary" data-rule-summary></p>
     <label class="narrow">Warn before certificate expiry (days)<span class="hint">0 disables; https and wss only</span><input name="ssl_warn_days" value="{{ f.ssl_warn_days }}" inputmode="numeric" size="4"></label>
   </fieldset>
 

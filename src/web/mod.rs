@@ -279,6 +279,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/monitors/new", get(admin::new_monitor))
         .route("/admin/monitors", post(admin::create_monitor))
         .route("/admin/monitors/test", post(admin::test_monitor))
+        .route("/admin/monitors/bulk", post(admin::bulk_monitors))
         .route("/admin/monitors/{id}", get(admin::monitor_detail).post(admin::update_monitor))
         .route("/admin/monitors/{id}/edit", get(admin::edit_monitor))
         .route("/admin/monitors/{id}/toggle", post(admin::toggle_monitor))

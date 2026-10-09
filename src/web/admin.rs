@@ -82,6 +82,7 @@ struct DashboardPage {
     count_up: usize,
     count_down: usize,
     count_other: usize,
+    group_options: Vec<(i64, String)>,
 }
 
 pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): Query<NoticeQuery>) -> AppResult<Html<String>> {
@@ -141,6 +142,7 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
     render(&DashboardPage {
         layout: Layout::admin("Monitors", &user, "monitors").with_notice(q.notice.as_deref()),
         empty: rows.is_empty(),
+        group_options: all_groups.iter().map(|g| (g.id, g.name.clone())).collect(),
         groups: public::group_buckets(&all_groups, rows, |r| r.group_id),
         count_up,
         count_down,
@@ -203,6 +205,53 @@ pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
         }
         Err(e) => Ok((StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "ok": false, "error": e }))).into_response()),
     }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct BulkForm {
+    csrf: String,
+    ids: Vec<i64>,
+    action: String,
+    group_id: String,
+}
+
+/// Pauses, resumes, moves or deletes the monitors ticked on the dashboard.
+pub async fn bulk_monitors(State(st): State<AppState>, user: CurrentUser, Form(f): Form<BulkForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let all = store::monitors::list(st.db()).await?;
+    let ids: Vec<i64> = f.ids.iter().copied().filter(|id| all.iter().any(|m| m.id == *id)).collect();
+    if ids.is_empty() {
+        return Ok(Redirect::to("/admin?notice=none-selected").into_response());
+    }
+    let notice = match f.action.as_str() {
+        "pause" | "resume" => {
+            let active = f.action == "resume";
+            for &id in &ids {
+                store::monitors::set_active(st.db(), id, active).await?;
+                st.scheduler.reload(id).await?;
+            }
+            if active { "bulk-resumed" } else { "bulk-paused" }
+        }
+        "move" => {
+            let group_ids: Vec<i64> = store::groups::list(st.db()).await?.iter().map(|g| g.id).collect();
+            let group = parse_opt_id(&f.group_id).map_err(AppError::bad_request)?;
+            for &id in &ids {
+                let (g, p) = plan_move(&all, &group_ids, id, group, None).map_err(AppError::bad_request)?;
+                store::monitors::move_to(st.db(), id, g, p).await?;
+            }
+            "bulk-moved"
+        }
+        "delete" => {
+            for &id in &ids {
+                st.scheduler.stop(id).await;
+                store::monitors::delete(st.db(), id).await?;
+            }
+            "bulk-deleted"
+        }
+        _ => return Err(AppError::bad_request("Unknown action")),
+    };
+    Ok(Redirect::to(&format!("/admin?notice={notice}")).into_response())
 }
 
 /// Runs the check described by the unsaved form and reports the result without storing anything.

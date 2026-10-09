@@ -524,3 +524,42 @@ async fn configuration_export_and_import_through_the_panel() {
     assert!(app.scheduler.is_running(now[0].id).await, "imported monitors start");
     app.scheduler.shutdown().await;
 }
+
+#[tokio::test]
+async fn bulk_actions_pause_move_and_delete_selected_monitors() {
+    use anpi::models::MonitorInput;
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let mk = |n: &'static str| MonitorInput::http(n, "http://127.0.0.1:9/");
+    let a = anpi::store::monitors::create(db, &mk("a")).await.unwrap();
+    let b = anpi::store::monitors::create(db, &mk("b")).await.unwrap();
+    let keep = anpi::store::monitors::create(db, &mk("keep")).await.unwrap();
+    let group = anpi::store::groups::create(db, "Prod", 0).await.unwrap();
+    for id in [a, b, keep] {
+        app.scheduler.reload(id).await.unwrap();
+    }
+    let (sa, sb, sg) = (a.to_string(), b.to_string(), group.to_string());
+
+    let r = c.post("/admin/monitors/bulk", &[("csrf", &csrf), ("ids", &sa), ("ids", &sb), ("action", "pause")]).await;
+    assert_eq!(r.headers.get("location").unwrap(), "/admin?notice=bulk-paused");
+    let get = |id| async move { anpi::store::monitors::get(db, id).await.unwrap().unwrap() };
+    assert!(!get(a).await.active && !get(b).await.active && get(keep).await.active, "only the ticked ones pause");
+    assert!(!app.scheduler.is_running(a).await);
+
+    c.post("/admin/monitors/bulk", &[("csrf", &csrf), ("ids", &sa), ("action", "move"), ("group_id", &sg)]).await;
+    assert_eq!(get(a).await.group_id, Some(group));
+
+    let none = c.post("/admin/monitors/bulk", &[("csrf", &csrf), ("action", "delete")]).await;
+    assert_eq!(none.headers.get("location").unwrap(), "/admin?notice=none-selected");
+    let bad = c.post("/admin/monitors/bulk", &[("csrf", "wrong"), ("ids", &sa), ("action", "delete")]).await;
+    assert_ne!(bad.status, StatusCode::SEE_OTHER, "csrf is checked");
+
+    c.post("/admin/monitors/bulk", &[("csrf", &csrf), ("ids", &sa), ("ids", &sb), ("action", "delete")]).await;
+    let left: Vec<i64> = anpi::store::monitors::list(db).await.unwrap().iter().map(|m| m.id).collect();
+    assert_eq!(left, vec![keep]);
+    assert!(app.scheduler.is_running(keep).await);
+    assert!(!c.get("/admin").await.body.contains("Drag a monitor"));
+    app.scheduler.shutdown().await;
+}

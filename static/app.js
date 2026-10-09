@@ -157,12 +157,47 @@
       else window.location.href = row.dataset.href;
     };
     row.addEventListener("click", function (e) {
-      if (e.target.closest("button, a")) return;
+      if (e.target.closest("button, a, input, label")) return;
       open(e.ctrlKey || e.metaKey);
     });
     row.addEventListener("auxclick", function (e) { if (e.button === 1) open(true); });
     row.addEventListener("keydown", function (e) { if (e.key === "Enter") open(e.ctrlKey || e.metaKey); });
   });
+
+  // Bulk actions: ticking a parent ticks its sub-monitors too.
+  var bulk = document.querySelector("form[data-bulk]");
+  if (bulk) {
+    var picks = function () { return Array.prototype.slice.call(document.querySelectorAll("[data-pick]")); };
+    var all = bulk.querySelector("[data-pick-all]");
+    var count = bulk.querySelector("[data-bulk-count]");
+    var actions = bulk.querySelector("[data-bulk-actions]");
+    var sync = function () {
+      var list = picks(), n = list.filter(function (p) { return p.checked; }).length;
+      all.checked = n > 0 && n === list.length;
+      all.indeterminate = n > 0 && n < list.length;
+      count.textContent = n ? n + " selected" : "Select all";
+      actions.hidden = n === 0;
+      list.forEach(function (p) { p.closest(".monitor-row").classList.toggle("picked", p.checked); });
+    };
+    all.addEventListener("change", function () {
+      picks().forEach(function (p) { p.checked = all.checked; });
+      sync();
+    });
+    document.addEventListener("change", function (e) {
+      if (!e.target.matches || !e.target.matches("[data-pick]")) return;
+      var row = e.target.closest(".monitor-row");
+      if (row.hasAttribute("data-has-children")) {
+        document.querySelectorAll('[data-parent="' + row.dataset.monitor + '"] [data-pick]').forEach(function (c) { c.checked = e.target.checked; });
+      }
+      sync();
+    });
+    bulk.addEventListener("submit", function (e) {
+      if (!e.submitter || e.submitter.value !== "delete") return;
+      var n = picks().filter(function (p) { return p.checked; }).length;
+      if (!window.confirm("Delete " + n + " monitor" + (n === 1 ? "" : "s") + " with all their history?")) e.preventDefault();
+    });
+    sync();
+  }
 
   // Drag monitors onto a group to move them, or onto another monitor to nest them.
   var dragList = document.querySelector("[data-drag-list]");

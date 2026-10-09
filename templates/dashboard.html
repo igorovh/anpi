@@ -4,6 +4,7 @@
 {% macro row(r, child, last) %}
   <div class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" data-href="/admin/monitors/{{ r.id }}" role="link" tabindex="0" draggable="true"
      data-monitor="{{ r.id }}" data-name="{{ r.name }}"{% if child %} data-parent="{{ r.parent_id.unwrap_or_default() }}"{% endif %}{% if !r.children.is_empty() %} data-aggregate="{{ r.aggregate }}" data-has-children{% endif %}>
+    <input class="pick" type="checkbox" form="bulk" name="ids" value="{{ r.id }}" aria-label="Select {{ r.name }}" data-pick>
     <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
     <span class="mname">
       <span class="name">{% if !r.children.is_empty() %}<button class="tree-toggle open" type="button" data-toggle="{{ r.id }}" aria-expanded="true" title="Hide sub-monitors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}{{ r.name }}{% if r.public %} <span class="tag" title="Shown on the public status page">public</span>{% endif %}</span>
@@ -47,7 +48,22 @@
 </section>
 {% endif %}
 {% if !empty || groups.len() > 1 %}
-<p class="drag-hint muted fade">Drag a monitor onto a group to move it, or onto another monitor to put it underneath.</p>
+{% if !empty %}
+<form method="post" action="/admin/monitors/bulk" id="bulk" class="bulk-bar fade" data-bulk>
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <label class="check"><input type="checkbox" data-pick-all> <span data-bulk-count>Select all</span></label>
+  <span class="bulk-actions" data-bulk-actions hidden>
+    <button class="btn small" type="submit" name="action" value="pause">Pause</button>
+    <button class="btn small" type="submit" name="action" value="resume">Resume</button>
+    <select name="group_id" aria-label="Move to group">
+      <option value="">No group</option>
+      {% for (id, name) in group_options %}<option value="{{ id }}">{{ name }}</option>{% endfor %}
+    </select>
+    <button class="btn small" type="submit" name="action" value="move">Move</button>
+    <button class="btn small danger" type="submit" name="action" value="delete">Delete</button>
+  </span>
+</form>
+{% endif %}
 <section class="monitor-list fade" data-drag-list>
   {% for g in groups %}
   {% if let Some(name) = g.name %}

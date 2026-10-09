@@ -1,5 +1,6 @@
 # Packages the static binaries built by the release workflow; use Dockerfile to build from source.
-FROM busybox:1.37-musl AS data
+# Runs on the build machine, so multi-arch builds need no emulation; mirror.gcr.io avoids Docker Hub limits.
+FROM --platform=$BUILDPLATFORM mirror.gcr.io/library/busybox:1.37-musl AS data
 RUN mkdir -p /data && chown 65532:65532 /data
 
 FROM gcr.io/distroless/static-debian12:nonroot

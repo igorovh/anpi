@@ -60,6 +60,77 @@
     });
   });
 
+  document.querySelectorAll("[data-show]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var el = document.getElementById(b.dataset.show);
+      if (!el) return;
+      el.hidden = false;
+      var input = el.querySelector("input:not([type=hidden])");
+      if (input) input.focus();
+    });
+  });
+  document.querySelectorAll("[data-hide]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var el = document.getElementById(b.dataset.hide);
+      if (el) el.hidden = true;
+    });
+  });
+
+  // Drag monitors onto a group to move them, or onto another monitor to nest them.
+  var dragList = document.querySelector("[data-drag-list]");
+  if (dragList) {
+    var dragged = null;
+    var errorBox = document.querySelector(".drop-error");
+    var clearOver = function () {
+      dragList.querySelectorAll(".drop-over").forEach(function (el) { el.classList.remove("drop-over"); });
+    };
+    var targetFor = function (el) {
+      if (!dragged) return null;
+      var group = el.closest(".drop-group");
+      if (group) return { el: group, group: group.dataset.groupId, parent: "" };
+      var row = el.closest(".monitor-row");
+      if (row && row.dataset.parent) row = dragList.querySelector('.monitor-row[data-monitor="' + row.dataset.parent + '"]');
+      if (!row || row === dragged || dragged.hasAttribute("data-has-children")) return null;
+      if (dragged.dataset.parent === row.dataset.monitor) return null;
+      return { el: row, group: "", parent: row.dataset.monitor };
+    };
+    dragList.addEventListener("dragstart", function (e) {
+      var row = e.target.closest && e.target.closest(".monitor-row");
+      if (!row) return;
+      dragged = row;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", row.dataset.name || "");
+      document.body.classList.add("dragging");
+      row.classList.add("is-dragged");
+    });
+    dragList.addEventListener("dragend", function () {
+      document.body.classList.remove("dragging");
+      if (dragged) dragged.classList.remove("is-dragged");
+      dragged = null;
+      clearOver();
+    });
+    dragList.addEventListener("dragover", function (e) {
+      var t = targetFor(e.target);
+      clearOver();
+      if (!t) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      t.el.classList.add("drop-over");
+    });
+    dragList.addEventListener("drop", function (e) {
+      var t = targetFor(e.target);
+      if (!t) return;
+      e.preventDefault();
+      var body = new URLSearchParams({ csrf: document.body.dataset.csrf, group_id: t.group, parent_id: t.parent });
+      fetch("/admin/monitors/" + dragged.dataset.monitor + "/move", { method: "POST", body: body, credentials: "same-origin" })
+        .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Move failed (" + r.status + ")" }; }); })
+        .then(function (res) {
+          if (res.ok) { window.location.reload(); return; }
+          if (errorBox) { errorBox.textContent = res.error; errorBox.hidden = false; }
+        });
+    });
+  }
+
   // Collapsible sub-monitors; the choice is remembered per parent.
   var COLLAPSE_KEY = "anpi-collapsed";
   var collapsedIds = {};

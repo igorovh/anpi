@@ -155,3 +155,17 @@ pub async fn set_channels(db: &Db, monitor_id: i64, channel_ids: &[i64]) -> sqlx
     }
     tx.commit().await
 }
+
+/// Moves a monitor; a parent drags its sub-monitors into the same group.
+pub async fn move_to(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i64>) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE monitors SET group_id = ?, parent_id = ?, updated_at = ? WHERE id = ?")
+        .bind(group_id)
+        .bind(parent_id)
+        .bind(now_ms())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE monitors SET group_id = ? WHERE parent_id = ?").bind(group_id).bind(id).execute(&mut *tx).await?;
+    tx.commit().await
+}

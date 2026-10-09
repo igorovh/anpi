@@ -70,7 +70,7 @@ impl MonitorRow {
 #[template(path = "dashboard.html")]
 struct DashboardPage {
     layout: Layout,
-    groups: Vec<(Option<String>, Vec<MonitorRow>)>,
+    groups: Vec<public::GroupBucket<MonitorRow>>,
     empty: bool,
     count_up: usize,
     count_down: usize,
@@ -131,11 +131,68 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
     render(&DashboardPage {
         layout: Layout::admin("Monitors", &user, "monitors").with_notice(q.notice.as_deref()),
         empty: rows.is_empty(),
-        groups: public::group_monitors(&all_groups, rows, |r| r.group_id),
+        groups: public::group_buckets(&all_groups, rows, |r| r.group_id),
         count_up,
         count_down,
         count_other,
     })
+}
+
+/// Works out where a dragged monitor lands; nesting puts it in its parent's group.
+pub fn plan_move(all: &[Monitor], group_ids: &[i64], id: i64, group: Option<i64>, parent: Option<i64>) -> Result<(Option<i64>, Option<i64>), String> {
+    if !all.iter().any(|m| m.id == id) {
+        return Err("Monitor not found".into());
+    }
+    match parent {
+        Some(p) => {
+            let Some(target) = all.iter().find(|m| m.id == p) else { return Err("Target monitor not found".into()) };
+            if p == id {
+                return Err("A monitor cannot be its own parent".into());
+            }
+            if target.parent_id.is_some() {
+                return Err("That monitor is itself a sub-monitor; only one level of nesting is supported".into());
+            }
+            if all.iter().any(|m| m.parent_id == Some(id)) {
+                return Err("This monitor has sub-monitors, so it cannot be placed under another one".into());
+            }
+            Ok((target.group_id, Some(p)))
+        }
+        None => match group {
+            Some(g) if !group_ids.contains(&g) => Err("That group no longer exists".into()),
+            g => Ok((g, None)),
+        },
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct MoveForm {
+    csrf: String,
+    group_id: String,
+    parent_id: String,
+}
+
+fn parse_opt_id(v: &str) -> Result<Option<i64>, String> {
+    match v.trim() {
+        "" => Ok(None),
+        x => x.parse().map(Some).map_err(|_| "Invalid id".to_string()),
+    }
+}
+
+pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<MoveForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let all = store::monitors::list(st.db()).await?;
+    let group_ids: Vec<i64> = store::groups::list(st.db()).await?.iter().map(|g| g.id).collect();
+    let plan = parse_opt_id(&f.group_id)
+        .and_then(|g| parse_opt_id(&f.parent_id).map(|p| (g, p)))
+        .and_then(|(g, p)| plan_move(&all, &group_ids, id, g, p));
+    match plan {
+        Ok((group, parent)) => {
+            store::monitors::move_to(st.db(), id, group, parent).await?;
+            Ok(axum::Json(serde_json::json!({ "ok": true })).into_response())
+        }
+        Err(e) => Ok((StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "ok": false, "error": e }))).into_response()),
+    }
 }
 
 pub async fn events(State(st): State<AppState>, _user: CurrentUser) -> impl IntoResponse {
@@ -744,6 +801,37 @@ mod tests {
         };
         let i = f.validate().unwrap();
         assert_eq!((i.kind.as_str(), i.target.as_str()), ("aggregate", ""));
+    }
+
+    fn mon(id: i64, group: Option<i64>, parent: Option<i64>) -> Monitor {
+        let now = 0;
+        Monitor {
+            id, name: format!("m{id}"), kind: "http".into(), target: String::new(), port: None, method: "GET".into(),
+            headers: String::new(), body: String::new(), interval_s: 60, retry_interval_s: 30, timeout_s: 10,
+            failure_threshold: 3, expected_status: "200-299".into(), ip_family: "auto".into(), follow_redirects: true,
+            ignore_tls: false, content_kind: "none".into(), content_value: String::new(), content_expected: String::new(),
+            ssl_warn_days: 14, dns_record_type: "A".into(), dns_server: String::new(), push_token: None, active: true,
+            public: false, ssl_notified_days: None, ssl_notified_expiry: None, created_at: now, updated_at: now,
+            group_id: group, public_name: String::new(), parent_id: parent,
+        }
+    }
+
+    #[test]
+    fn dropping_on_a_monitor_nests_it_in_that_monitors_group() {
+        let all = [mon(1, Some(10), None), mon(2, Some(20), None), mon(3, Some(10), Some(1))];
+        assert_eq!(plan_move(&all, &[10, 20], 2, None, Some(1)), Ok((Some(10), Some(1))));
+        assert_eq!(plan_move(&all, &[10, 20], 3, Some(20), None), Ok((Some(20), None)), "dropping on a group un-nests");
+        assert_eq!(plan_move(&all, &[10, 20], 3, None, None), Ok((None, None)), "no group");
+    }
+
+    #[test]
+    fn invalid_drops_are_rejected() {
+        let all = [mon(1, None, None), mon(2, None, None), mon(3, None, Some(1))];
+        assert!(plan_move(&all, &[], 1, None, Some(1)).unwrap_err().contains("own parent"));
+        assert!(plan_move(&all, &[], 2, None, Some(3)).unwrap_err().contains("only one level"));
+        assert!(plan_move(&all, &[], 1, None, Some(2)).unwrap_err().contains("has sub-monitors"));
+        assert!(plan_move(&all, &[], 2, Some(99), None).unwrap_err().contains("no longer exists"));
+        assert!(plan_move(&all, &[], 42, None, None).is_err());
     }
 
     #[test]

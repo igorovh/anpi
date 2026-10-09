@@ -350,3 +350,17 @@ p.small { font-size: 0.82rem; margin: -0.3rem 0 0.9rem; }
 @media (max-width: 720px) {
   .service.child { padding: 0.55rem 1.1rem; grid-template-columns: 1fr; gap: 0.35rem; }
 }
+
+/* drag and drop on the dashboard */
+.page > .drag-hint { padding: 0.55rem 2rem; font-size: 0.8rem; border-bottom: 1px solid var(--line); }
+.new-group { flex-basis: 100%; display: flex; gap: 0.5rem; align-items: center; }
+.new-group input { margin: 0; max-width: 22rem; }
+.monitor-row[draggable="true"] { cursor: grab; }
+.monitor-row.is-dragged { opacity: 0.4; }
+.drop-group.drop-over, .monitor-row.drop-over { box-shadow: inset 0 0 0 1px var(--ink); background: var(--raised); }
+.monitor-row.drop-over::after { content: "put underneath"; position: absolute; right: 2rem; font-size: 0.7rem; color: var(--muted); }
+.monitor-row { position: relative; }
+.group-head .empty-note { margin-left: 0.8rem; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.drop-out { display: none; padding: 1rem 2rem; text-align: center; color: var(--muted); font-size: 0.82rem; border-top: 1px dashed var(--faint); }
+.dragging .drop-out { display: block; }
+.page > .drop-error { margin: 0; }

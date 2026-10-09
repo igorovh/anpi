@@ -108,6 +108,7 @@ pub struct GroupForm {
     csrf: String,
     name: String,
     sort_order: String,
+    next: String,
 }
 
 fn validate_group(f: &GroupForm, default_order: i64) -> AppResult<(String, i64)> {
@@ -126,7 +127,8 @@ pub async fn create_group(State(st): State<AppState>, user: CurrentUser, Form(f)
     user.check_csrf(&f.csrf)?;
     let (name, order) = validate_group(&f, store::groups::next_sort_order(st.db()).await?)?;
     store::groups::create(st.db(), &name, order).await?;
-    Ok(Redirect::to("/admin/settings?notice=created#groups").into_response())
+    let back = if f.next == "/admin" { "/admin?notice=created" } else { "/admin/settings?notice=created#groups" };
+    Ok(Redirect::to(back).into_response())
 }
 
 pub async fn update_group(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<GroupForm>) -> AppResult<Response> {

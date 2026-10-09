@@ -275,6 +275,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/monitors/{id}/edit", get(admin::edit_monitor))
         .route("/admin/monitors/{id}/toggle", post(admin::toggle_monitor))
         .route("/admin/monitors/{id}/delete", post(admin::delete_monitor))
+        .route("/admin/monitors/{id}/move", post(admin::move_monitor))
         .route("/admin/notifications", get(channels::list).post(channels::create))
         .route("/admin/notifications/new", get(channels::new_form))
         .route("/admin/notifications/{id}", get(channels::edit_form).post(channels::update))

@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block body_attrs %} data-events="/admin/events"{% endblock %}
+{% block body_attrs %} data-events="/admin/events" data-csrf="{{ layout.csrf }}"{% endblock %}
 
 {% macro row(r, child, last) %}
-  <a class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" href="/admin/monitors/{{ r.id }}"
-     data-monitor="{{ r.id }}"{% if child %} data-parent="{{ r.parent_id.unwrap_or_default() }}"{% endif %}{% if !r.children.is_empty() %} data-aggregate="{{ r.aggregate }}"{% endif %}>
+  <a class="monitor-row{% if !r.active %} paused{% endif %}{% if child %} child{% if last %} last{% endif %}{% endif %}" href="/admin/monitors/{{ r.id }}" draggable="true"
+     data-monitor="{{ r.id }}" data-name="{{ r.name }}"{% if child %} data-parent="{{ r.parent_id.unwrap_or_default() }}"{% endif %}{% if !r.children.is_empty() %} data-aggregate="{{ r.aggregate }}" data-has-children{% endif %}>
     <span class="status {{ r.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ r.status_label }}</span></span>
     <span class="mname">
       <span class="name">{% if !r.children.is_empty() %}<button class="tree-toggle open" type="button" data-toggle="{{ r.id }}" aria-expanded="true" title="Hide sub-monitors"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}{{ r.name }}{% if r.public %} <span class="tag" title="Shown on the public status page">public</span>{% endif %}</span>
@@ -27,10 +27,17 @@
     </p>
   </div>
   <div class="actions">
-    <a class="btn" href="/admin/settings#groups">Groups</a>
+    <button class="btn" type="button" data-show="new-group">+ Group</button>
     <a class="btn" href="/admin/import">Import</a>
     <a class="btn primary" href="/admin/monitors/new">+ New monitor</a>
   </div>
+  <form method="post" action="/admin/groups" class="new-group" id="new-group" hidden>
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+    <input type="hidden" name="next" value="/admin">
+    <input name="name" placeholder="Group name, e.g. Twitch Enhancer" required maxlength="60" aria-label="Group name">
+    <button class="btn primary" type="submit">Add group</button>
+    <button class="btn" type="button" data-hide="new-group">Cancel</button>
+  </form>
 </section>
 
 {% if empty %}
@@ -38,15 +45,24 @@
   <p>No monitors yet.</p>
   <p><a class="btn primary" href="/admin/monitors/new">Add your first monitor</a> <span class="muted">or</span> <a href="/admin/import">import from Uptime Kuma</a></p>
 </section>
-{% else %}
-<section class="monitor-list fade">
-  {% for (group, rows) in groups %}
-  {% if let Some(name) = group %}<div class="group-head">{{ name }} <span class="muted">{{ rows.len() }}</span></div>{% endif %}
-  {% for r in rows %}
+{% endif %}
+{% if !empty || groups.len() > 1 %}
+<p class="drag-hint muted fade">Drag a monitor onto a group to move it, or onto another monitor to put it underneath.</p>
+<section class="monitor-list fade" data-drag-list>
+  {% for g in groups %}
+  {% if let Some(name) = g.name %}
+  <div class="group-head drop-group{% if g.id.is_none() %} loose{% endif %}" data-group-id="{{ g.id.unwrap_or_default() }}"{% if g.id.is_none() %} data-no-group{% endif %}>
+    {{ name }} <span class="muted">{{ g.items.len() }}</span>
+    {% if g.id.is_some() && g.items.is_empty() %}<span class="muted empty-note">empty · drop monitors here</span>{% endif %}
+  </div>
+  {% endif %}
+  {% for r in g.items %}
   {% call row(r, false, false) %}{% endcall %}
   {% for c in r.children %}{% call row(c, true, loop.last) %}{% endcall %}{% endfor %}
   {% endfor %}
   {% endfor %}
+  <div class="drop-group drop-out" data-group-id="" data-no-group>Drop here to remove from its group and parent</div>
 </section>
+<p class="drop-error error" role="alert" hidden></p>
 {% endif %}
 {% endblock %}

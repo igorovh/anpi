@@ -119,6 +119,29 @@ pub fn group_monitors<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl 
         .collect()
 }
 
+pub struct GroupBucket<T> {
+    pub id: Option<i64>,
+    pub name: Option<String>,
+    pub items: Vec<T>,
+}
+
+/// Like `group_monitors`, but keeps empty groups so they can be drop targets in the panel.
+pub fn group_buckets<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl Fn(&T) -> Option<i64>) -> Vec<GroupBucket<T>> {
+    let mut buckets: Vec<GroupBucket<T>> =
+        groups.iter().map(|g| GroupBucket { id: Some(g.id), name: Some(g.name.clone()), items: Vec::new() }).collect();
+    let known: Vec<i64> = groups.iter().map(|g| g.id).collect();
+    let mut loose = Vec::new();
+    for item in items {
+        match group_of(&item).and_then(|g| known.iter().position(|k| *k == g)) {
+            Some(i) => buckets[i].items.push(item),
+            None => loose.push(item),
+        }
+    }
+    let name = (!groups.is_empty()).then(|| "No group".to_string());
+    buckets.push(GroupBucket { id: None, name, items: loose });
+    buckets
+}
+
 fn overall(monitors: &[PublicMonitor]) -> (&'static str, &'static str, &'static str) {
     let active: Vec<Status> = monitors.iter().filter_map(|m| m.status).collect();
     let down = active.iter().filter(|s| **s == Status::Down).count();
@@ -328,6 +351,22 @@ mod tests {
             ],
             "unknown group ids fall back to Other"
         );
+    }
+
+    #[test]
+    fn panel_buckets_keep_empty_groups_for_dropping() {
+        let groups = [g(1, "Empty"), g(2, "Used")];
+        let out = group_buckets(&groups, vec![(10, Some(2)), (11, None), (12, Some(7))], |i| i.1);
+        let shape: Vec<_> = out.iter().map(|b| (b.id, b.name.clone(), b.items.iter().map(|i| i.0).collect::<Vec<_>>())).collect();
+        assert_eq!(
+            shape,
+            vec![
+                (Some(1), Some("Empty".into()), vec![]),
+                (Some(2), Some("Used".into()), vec![10]),
+                (None, Some("No group".into()), vec![11, 12]),
+            ]
+        );
+        assert_eq!(group_buckets::<i32>(&[], vec![1], |_| None)[0].name, None, "no header when there are no groups");
     }
 
     #[test]

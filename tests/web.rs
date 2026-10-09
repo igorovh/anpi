@@ -333,3 +333,40 @@ async fn asset_urls_change_with_their_content() {
     assert!(page.contains(&format!("/static/app.css?v={v}")), "stylesheet URL carries the content hash");
     assert_ne!(v, env!("CARGO_PKG_VERSION"));
 }
+
+#[tokio::test]
+async fn dragging_moves_monitors_between_groups_and_parents() {
+    use anpi::models::MonitorInput;
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let db = &app.ctx.db;
+
+    let r = c.post("/admin/groups", &[("csrf", &csrf), ("name", "Twitch Enhancer"), ("next", "/admin")]).await;
+    assert_eq!(r.location(), "/admin?notice=created", "creating a group from the dashboard returns there");
+    let group = anpi::store::groups::list(db).await.unwrap()[0].id;
+    assert!(c.get("/admin").await.body.contains("drop monitors here"), "empty groups stay visible as drop targets");
+
+    let api = anpi::store::monitors::create(db, &MonitorInput::http("API health", "https://example.com/health")).await.unwrap();
+    let badges = anpi::store::monitors::create(db, &MonitorInput::http("Badges", "https://example.com/badges")).await.unwrap();
+    let mv = |id: i64| format!("/admin/monitors/{id}/move");
+
+    let r = c.post(&mv(api), &[("csrf", &csrf), ("group_id", &group.to_string()), ("parent_id", "")]).await;
+    assert!(r.status.is_success(), "{}", r.body);
+    let r = c.post(&mv(badges), &[("csrf", &csrf), ("group_id", ""), ("parent_id", &api.to_string())]).await;
+    assert!(r.status.is_success(), "{}", r.body);
+    let b = anpi::store::monitors::get(db, badges).await.unwrap().unwrap();
+    assert_eq!((b.parent_id, b.group_id), (Some(api), Some(group)), "a nested monitor joins its parent's group");
+
+    let r = c.post(&mv(api), &[("csrf", &csrf), ("group_id", ""), ("parent_id", &badges.to_string())]).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.body.contains("sub-monitor"), "{}", r.body);
+
+    // Moving the parent out of the group takes its sub-monitors along.
+    c.post(&mv(api), &[("csrf", &csrf), ("group_id", ""), ("parent_id", "")]).await;
+    let b = anpi::store::monitors::get(db, badges).await.unwrap().unwrap();
+    assert_eq!((b.parent_id, b.group_id), (Some(api), None));
+
+    let forged = c.post(&mv(api), &[("csrf", "nope"), ("group_id", &group.to_string())]).await;
+    assert_eq!(forged.status, StatusCode::FORBIDDEN);
+}

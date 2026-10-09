@@ -165,8 +165,7 @@ fn overall(monitors: &[PublicMonitor]) -> (&'static str, &'static str, &'static 
 async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
     let db = st.db();
     let now = now_ms();
-    let mut monitors: Vec<Monitor> = store::monitors::list_public(db).await?;
-    monitors.sort_by_key(|m| m.public_label().to_lowercase());
+    let monitors: Vec<Monitor> = store::monitors::list_public(db).await?;
     let latest = store::heartbeats::recent_all(db, 1).await?;
     let up24 = stats::uptime_all(db, now - DAY_MS).await?;
     let up30 = stats::uptime_all(db, now - 30 * DAY_MS).await?;

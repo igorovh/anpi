@@ -45,3 +45,7 @@ The public status page is at `/` and the panel at `/admin`.
 - [Monitoring](docs/monitoring.md): monitor types, response rules, groups and sub-monitors, alerts, the status page and its JSON API
 - [Configuration and deployment](docs/configuration.md): environment variables, SSO with Keycloak, data retention, systemd and Docker notes, command line
 - [Development](docs/development.md): example data, tests, project layout and releases
+
+## License
+
+[MIT](LICENSE). The bundled IBM Plex Sans JP font is under the [SIL Open Font License 1.1](static/fonts/OFL.txt).

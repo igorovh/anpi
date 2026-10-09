@@ -599,3 +599,30 @@ async fn monitors_can_be_reordered_and_moved_out_of_groups() {
     assert_eq!(anpi::store::monitors::get(db, g).await.unwrap().unwrap().group_id, None);
     assert_eq!(names().await.last().unwrap(), "grouped", "dropping on a group header sends it to the end");
 }
+
+#[tokio::test]
+async fn status_page_follows_the_panel_order() {
+    use anpi::models::MonitorInput;
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let mk = |n: &str, public_name: &str| MonitorInput { public: true, active: false, public_name: public_name.into(), ..MonitorInput::http(n, "https://example.com") };
+    let a = anpi::store::monitors::create(db, &mk("a", "Zebra")).await.unwrap();
+    anpi::store::monitors::create(db, &mk("b", "Apple")).await.unwrap();
+    let m = anpi::store::monitors::create(db, &mk("c", "Mango")).await.unwrap();
+    let r = c.post(&format!("/admin/monitors/{m}/move"), &[("csrf", &csrf), ("anchor_id", &a.to_string()), ("place", "before")]).await;
+    assert!(r.body.contains("\"ok\":true"), "{}", r.body);
+
+    fn order(body: &str, names: [&'static str; 3]) -> Vec<&'static str> {
+        let mut at: Vec<(usize, &'static str)> = names.iter().map(|n| (body.find(n).unwrap_or_else(|| panic!("{n} missing")), *n)).collect();
+        at.sort();
+        at.into_iter().map(|(_, n)| n).collect()
+    }
+    let public = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert_eq!(order(&public, ["Zebra", "Apple", "Mango"]), ["Mango", "Zebra", "Apple"], "not sorted by public name");
+    let json = Client::new(anpi::web::router(app.state.clone())).get("/api/status.json").await.body;
+    assert_eq!(order(&json, ["Zebra", "Apple", "Mango"]), ["Mango", "Zebra", "Apple"]);
+    let panel = c.get("/admin").await.body;
+    assert_eq!(order(&panel, ["data-name=\"a\"", "data-name=\"b\"", "data-name=\"c\""]), ["data-name=\"c\"", "data-name=\"a\"", "data-name=\"b\""]);
+}

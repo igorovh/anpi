@@ -47,7 +47,7 @@ jobs:
           name="anpi-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
           bin=anpi; [[ "${{ matrix.target }}" == *windows* ]] && bin=anpi.exe
-          cp "target/${{ matrix.target }}/release/$bin" README.md "dist/$name/"
+          cp "target/${{ matrix.target }}/release/$bin" README.md LICENSE "dist/$name/"
           cp -r deploy "dist/$name/"
           cd dist
           if [[ "${{ matrix.target }}" == *windows* ]]; then

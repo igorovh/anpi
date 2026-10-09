@@ -179,7 +179,7 @@ cargo clippy --all-targets
 
 The integration tests start real local servers (HTTP, self-signed HTTPS, a WebSocket echo server, a webhook receiver and a mock OIDC provider). They check that each outage produces exactly one down and one recovery alert, that maintenance and restarts stay quiet, IPv4/IPv6 selection, TLS and certificate handling, retention, CSRF and origin checks, login rate limiting, drag and drop moves and the full SSO flow.
 
-`design/playground.html` is a standalone page for trying layout, font and colour changes against the real stylesheet; open it straight from disk. `docs/brand/*.html` are the sources of the README images, and `anpi demo` produces the data shown in the screenshots.
+`docs/brand/*.html` are the sources of the README images, and `anpi demo` produces the data shown in the screenshots.
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow builds the archives, publishes the GitHub release, and assembles the Docker image from the same static binaries using `Dockerfile.release`.
 

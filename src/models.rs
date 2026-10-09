@@ -55,10 +55,11 @@ pub enum MonitorKind {
     Dns,
     Push,
     Aggregate,
+    WebSocket,
 }
 
 impl MonitorKind {
-    pub const ALL: [MonitorKind; 6] = [Self::Http, Self::Tcp, Self::Ping, Self::Dns, Self::Push, Self::Aggregate];
+    pub const ALL: [MonitorKind; 7] = [Self::Http, Self::WebSocket, Self::Tcp, Self::Ping, Self::Dns, Self::Push, Self::Aggregate];
 
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
@@ -68,6 +69,7 @@ impl MonitorKind {
             "dns" => Self::Dns,
             "push" => Self::Push,
             "aggregate" => Self::Aggregate,
+            "websocket" => Self::WebSocket,
             _ => return None,
         })
     }
@@ -80,6 +82,7 @@ impl MonitorKind {
             Self::Dns => "dns",
             Self::Push => "push",
             Self::Aggregate => "aggregate",
+            Self::WebSocket => "websocket",
         }
     }
 
@@ -91,6 +94,7 @@ impl MonitorKind {
             Self::Dns => "DNS",
             Self::Push => "Push (cron heartbeat)",
             Self::Aggregate => "Aggregate (status of sub-monitors)",
+            Self::WebSocket => "WebSocket",
         }
     }
 }
@@ -254,6 +258,46 @@ pub struct MonitorInput {
     pub parent_id: Option<i64>,
 }
 
+impl Monitor {
+    /// An unsaved monitor built from form input, used to run a check before saving.
+    pub fn draft(m: &MonitorInput) -> Self {
+        Self {
+            id: 0,
+            name: m.name.clone(),
+            kind: m.kind.clone(),
+            target: m.target.clone(),
+            port: m.port,
+            method: m.method.clone(),
+            headers: m.headers.clone(),
+            body: m.body.clone(),
+            interval_s: m.interval_s,
+            retry_interval_s: m.retry_interval_s,
+            timeout_s: m.timeout_s,
+            failure_threshold: m.failure_threshold,
+            expected_status: m.expected_status.clone(),
+            ip_family: m.ip_family.clone(),
+            follow_redirects: m.follow_redirects,
+            ignore_tls: m.ignore_tls,
+            content_kind: m.content_kind.clone(),
+            content_value: m.content_value.clone(),
+            content_expected: m.content_expected.clone(),
+            ssl_warn_days: m.ssl_warn_days,
+            dns_record_type: m.dns_record_type.clone(),
+            dns_server: m.dns_server.clone(),
+            push_token: None,
+            active: m.active,
+            public: m.public,
+            ssl_notified_days: None,
+            ssl_notified_expiry: None,
+            created_at: 0,
+            updated_at: 0,
+            group_id: m.group_id,
+            public_name: m.public_name.clone(),
+            parent_id: m.parent_id,
+        }
+    }
+}
+
 impl MonitorInput {
     pub fn http(name: &str, url: &str) -> Self {
         Self {
@@ -289,6 +333,8 @@ pub struct Timings {
 #[derive(Clone, Debug, Default)]
 pub struct CheckOutcome {
     pub ok: bool,
+    /// Start of the response body or WebSocket reply, shown by "Run check now".
+    pub preview: Option<String>,
     pub message: String,
     pub status_code: Option<u16>,
     pub timings: Timings,

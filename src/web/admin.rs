@@ -110,7 +110,10 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
             parent_id: m.parent_id,
             name: m.name.clone(),
             kind: m.kind().label(),
-            target: m.display_target(),
+            target: match m.kind() {
+                MonitorKind::Aggregate | MonitorKind::Push => m.display_target(),
+                _ => format!("{} · every {}s", m.display_target(), m.interval_s),
+            },
             status,
             status_class,
             status_label,
@@ -195,6 +198,35 @@ pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
     }
 }
 
+/// Runs the check described by the unsaved form and reports the result without storing anything.
+pub async fn test_monitor(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MonitorForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let input = match validate_with_groups(&st, &f, None).await? {
+        Ok(i) => i,
+        Err(e) => return Ok(axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response()),
+    };
+    let kind = MonitorKind::parse(&input.kind).unwrap_or(MonitorKind::Http);
+    if matches!(kind, MonitorKind::Push | MonitorKind::Aggregate) {
+        return Ok(axum::Json(serde_json::json!({ "ok": false, "error": "This type is not checked actively." })).into_response());
+    }
+    let out = checks::run(&Monitor::draft(&input)).await;
+    let t = &out.timings;
+    let timings: Vec<(&str, String)> = [("DNS", t.dns_ms), ("Connect", t.connect_ms), ("TLS", t.tls_ms), ("Response", t.ttfb_ms), ("Total", t.total_ms)]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, format_ms(Some(v)))))
+        .collect();
+    Ok(axum::Json(serde_json::json!({
+        "ok": out.ok,
+        "message": out.message,
+        "status_code": out.status_code,
+        "remote_ip": out.remote_ip,
+        "timings": timings,
+        "cert": views::cert_info(out.cert_expires_at, now_ms()).map(|(d, _)| d),
+        "preview": out.preview,
+    }))
+    .into_response())
+}
+
 pub async fn events(State(st): State<AppState>, _user: CurrentUser) -> impl IntoResponse {
     public::event_stream(&st, false)
 }
@@ -243,7 +275,7 @@ impl Default for MonitorForm {
 impl MonitorForm {
     fn from_monitor_input(m: &MonitorInput, channels: Vec<i64>) -> Self {
         let flag = |b: bool| b.then(|| "on".to_string());
-        let is_http = m.kind == "http";
+        let is_http = m.kind == "http" || m.kind == "websocket";
         Self {
             csrf: String::new(),
             name: m.name.clone(),
@@ -350,7 +382,8 @@ impl MonitorForm {
             return Err("Name is required (up to 100 characters)".into());
         }
         let kind = MonitorKind::parse(&self.kind).ok_or("Unknown monitor type")?;
-        let target = if kind == MonitorKind::Http { self.url.trim() } else { self.host.trim() }.to_string();
+        let uses_url = matches!(kind, MonitorKind::Http | MonitorKind::WebSocket);
+        let target = if uses_url { self.url.trim() } else { self.host.trim() }.to_string();
         let mut port = None;
         let mut method = "GET".to_string();
         let content_kind = ContentKind::parse(&self.content_kind);
@@ -366,6 +399,14 @@ impl MonitorForm {
                 }
                 checks::parse_headers(&self.headers)?;
                 StatusMatcher::parse(&self.expected_status).map_err(|e| format!("Accepted status codes: {e}"))?;
+                content::validate(content_kind, &self.content_value)?;
+            }
+            MonitorKind::WebSocket => {
+                let u = url::Url::parse(&target).map_err(|_| "URL must be a full address like wss://example.com/socket")?;
+                if !matches!(u.scheme(), "ws" | "wss") || u.host_str().is_none() {
+                    return Err("WebSocket URL must start with ws:// or wss://".into());
+                }
+                checks::parse_headers(&self.headers)?;
                 content::validate(content_kind, &self.content_value)?;
             }
             MonitorKind::Tcp => {
@@ -406,10 +447,10 @@ impl MonitorForm {
             ip_family: IpFamily::parse(&self.ip_family).as_str().into(),
             follow_redirects: self.follow_redirects.is_some(),
             ignore_tls: self.ignore_tls.is_some(),
-            content_kind: if kind == MonitorKind::Http { content_kind.as_str().into() } else { "none".into() },
+            content_kind: if uses_url { content_kind.as_str().into() } else { "none".into() },
             content_value: self.content_value.clone(),
             content_expected: match kind {
-                MonitorKind::Http => self.content_expected.trim().to_string(),
+                MonitorKind::Http | MonitorKind::WebSocket => self.content_expected.trim().to_string(),
                 MonitorKind::Dns => self.dns_expected.trim().to_string(),
                 _ => String::new(),
             },
@@ -614,14 +655,15 @@ struct DetailPage {
     group: Option<String>,
     parent: Option<(i64, String)>,
     children: Vec<ChildRow>,
+    facts: Vec<(&'static str, String)>,
     bars: Vec<Bar>,
     incidents: Vec<IncidentRow>,
     checks: Vec<CheckRow>,
 }
 
 fn origin(st: &AppState, headers: &HeaderMap) -> String {
-    if let Some(b) = &st.ctx.config.base_url {
-        return b.clone();
+    if let Some(b) = st.ctx.base_url() {
+        return b;
     }
     let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("localhost");
     let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()).unwrap_or("http");
@@ -723,6 +765,7 @@ pub async fn monitor_detail(
         },
         parent,
         children,
+        facts: views::check_facts(&m),
         bars: views::heartbeat_bars(&oldest_first, 60),
         incidents,
         checks,

@@ -33,6 +33,10 @@ impl TlsConfigs {
         CONFIGS.get_or_init(|| TlsConfigs::with_roots(default_roots()))
     }
 
+    pub fn client(&self, ignore_tls: bool) -> Arc<ClientConfig> {
+        if ignore_tls { self.insecure.clone() } else { self.verified.clone() }
+    }
+
     pub fn with_roots(roots: RootCertStore) -> Self {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let mut verified = ClientConfig::builder_with_provider(provider.clone())
@@ -472,7 +476,7 @@ pub fn cert_not_after(der: &CertificateDer<'_>) -> Option<i64> {
     Some(cert.validity().not_after.timestamp() * 1000)
 }
 
-fn tls_error_text(e: &std::io::Error) -> String {
+pub fn tls_error_text(e: &std::io::Error) -> String {
     match e.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
         Some(rustls::Error::InvalidCertificate(c)) => format!("invalid certificate: {c:?}"),
         Some(other) => other.to_string(),

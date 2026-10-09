@@ -370,3 +370,30 @@ async fn dragging_moves_monitors_between_groups_and_parents() {
     let forged = c.post(&mv(api), &[("csrf", "nope"), ("group_id", &group.to_string())]).await;
     assert_eq!(forged.status, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn run_check_now_tests_unsaved_settings() {
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let target = common::Target::start().await;
+    *target.body.lock().unwrap() = r#"{"status":"degraded"}"#.into();
+    let form = |expected: &str| {
+        vec![("csrf", csrf.clone()), ("name", "t".into()), ("kind", "http".into()), ("url", target.url("/health")),
+             ("expected_status", "200-299".into()), ("content_kind", "json_path".into()), ("content_value", "$.status".into()),
+             ("content_expected", expected.to_string()), ("timeout_s", "5".into())]
+    };
+    let r = c.post("/admin/monitors/test", &form("ok").iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(v["ok"], false);
+    assert!(v["message"].as_str().unwrap().contains("degraded"));
+    assert_eq!(v["status_code"], 200);
+    assert!(v["preview"].as_str().unwrap().contains("degraded"), "the body is shown to help fix the rule");
+
+    let r = c.post("/admin/monitors/test", &form("degraded").iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&r.body).unwrap()["ok"], true);
+    assert!(anpi::store::monitors::list(&app.ctx.db).await.unwrap().is_empty(), "testing saves nothing");
+
+    let bad = c.post("/admin/monitors/test", &[("csrf", &csrf), ("name", "t"), ("kind", "http"), ("url", "nope")]).await;
+    assert!(serde_json::from_str::<serde_json::Value>(&bad.body).unwrap()["error"].as_str().unwrap().contains("URL"));
+}

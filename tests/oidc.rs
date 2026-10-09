@@ -183,3 +183,70 @@ async fn sso_mode_disables_local_accounts() {
     assert_eq!(c.post("/login", &[("username", "a"), ("password", "b")]).await.status, StatusCode::NOT_FOUND);
     assert_eq!(c.get("/setup").await.location(), "/login");
 }
+
+#[tokio::test]
+async fn sso_can_be_enabled_from_the_panel_and_disabled_from_the_cli() {
+    let (issuer, idp) = start_idp().await;
+    let app = app(config(&[])).await;
+    let mut admin = common::signed_in(&app).await;
+    let csrf = admin.csrf().await;
+    let form = |iss: &str, enabled: bool| {
+        let mut f = vec![("csrf", csrf.clone()), ("base_url", "http://localhost/".into()), ("issuer", iss.into()),
+                         ("client_id", "anpi".into()), ("client_secret", "s3cret".into())];
+        if enabled {
+            f.push(("enabled", "on".into()));
+        }
+        f
+    };
+    let post = |f: &Vec<(&'static str, String)>| f.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>();
+
+    // A provider that does not answer must never switch passwords off.
+    let dead = post(&form("http://127.0.0.1:9/realms/x", true));
+    let r = admin.post("/admin/sso", &dead.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.body.contains("could not be reached"), "{}", r.body);
+    assert!(app.state.oidc().is_none());
+
+    let test = post(&form(&issuer, false));
+    let r = admin.post("/admin/sso/test", &test.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert!(r.body.contains(r#""ok":true"#), "{}", r.body);
+
+    let on = post(&form(&issuer, true));
+    let r = admin.post("/admin/sso", &on.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+    assert!(app.state.oidc().is_some(), "applies without a restart");
+    assert!(admin.get("/admin").await.status.is_success(), "the admin who enabled it stays signed in");
+
+    let mut visitor = Client::new(anpi::web::router(app.state.clone()));
+    assert!(visitor.get("/login").await.body.contains("Continue with SSO"));
+    assert_eq!(visitor.post("/login", &[("username", "admin"), ("password", "a-long-password")]).await.status, StatusCode::NOT_FOUND);
+    let q = begin(&mut visitor, &idp, "/admin").await;
+    assert_eq!(q["redirect_uri"], "http://localhost/auth/oidc/callback");
+    let r = visitor.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+
+    // The stored secret is kept when the form leaves it empty.
+    let mut keep = post(&form(&issuer, true));
+    keep.retain(|(k, _)| *k != "client_secret");
+    admin.post("/admin/sso", &keep.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert_eq!(anpi::auth::sso::PanelSso::load(&app.ctx.db).await.unwrap().client_secret, "s3cret");
+
+    anpi::auth::sso::disable(&app.ctx.db).await.unwrap();
+    app.ctx.reload_auth().await.unwrap();
+    let back = Client::new(anpi::web::router(app.state.clone())).post("/login", &[("username", "admin"), ("password", "a-long-password")]).await;
+    assert_eq!(back.status, StatusCode::SEE_OTHER, "passwords work again after disable-sso");
+}
+
+#[tokio::test]
+async fn environment_sso_cannot_be_changed_from_the_panel() {
+    let (issuer, idp) = start_idp().await;
+    let app = sso_app(&issuer, None).await;
+    let mut c = Client::new(anpi::web::router(app.state.clone()));
+    let q = begin(&mut c, &idp, "/admin").await;
+    c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let csrf = c.csrf().await;
+    let page = c.get("/admin/settings").await.body;
+    assert!(page.contains("environment variables"));
+    let r = c.post("/admin/sso", &[("csrf", &csrf), ("issuer", "https://other"), ("client_id", "x")]).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+}

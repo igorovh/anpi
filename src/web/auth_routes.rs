@@ -41,12 +41,12 @@ pub struct NextQuery {
 }
 
 fn login_page_response(st: &AppState, status: StatusCode, next: &str, username: &str, error: Option<String>) -> AppResult<Response> {
-    let page = LoginPage { layout: Layout::bare(&st.ctx.branding(), "Sign in"), sso: st.oidc.is_some(), next: next.into(), username: username.into(), error };
+    let page = LoginPage { layout: Layout::bare(&st.ctx.branding(), "Sign in"), sso: st.oidc().is_some(), next: next.into(), username: username.into(), error };
     Ok((status, render(&page)?).into_response())
 }
 
 pub async fn login_page(State(st): State<AppState>, Query(q): Query<NextQuery>) -> AppResult<Response> {
-    if st.oidc.is_none() && store::users::count(st.db()).await? == 0 {
+    if st.oidc().is_none() && store::users::count(st.db()).await? == 0 {
         return Ok(Redirect::to("/setup").into_response());
     }
     let error = q.error.map(|_| "Sign-in failed. Please try again.".to_string());
@@ -61,7 +61,7 @@ pub struct LoginForm {
 }
 
 pub async fn login(State(st): State<AppState>, ClientIp(ip): ClientIp, jar: CookieJar, Form(f): Form<LoginForm>) -> AppResult<Response> {
-    if st.oidc.is_some() {
+    if st.oidc().is_some() {
         return Err(AppError::not_found());
     }
     let next = safe_next(f.next.as_deref());
@@ -93,7 +93,7 @@ pub async fn login(State(st): State<AppState>, ClientIp(ip): ClientIp, jar: Cook
 }
 
 async fn setup_allowed(st: &AppState) -> AppResult<bool> {
-    Ok(st.oidc.is_none() && store::users::count(st.db()).await? == 0)
+    Ok(st.oidc().is_none() && store::users::count(st.db()).await? == 0)
 }
 
 pub async fn setup_page(State(st): State<AppState>) -> AppResult<Response> {
@@ -149,8 +149,8 @@ pub async fn logout(State(st): State<AppState>, user: CurrentUser, jar: CookieJa
     user.check_csrf(&f.csrf)?;
     store::users::delete_session(st.db(), &user.token).await?;
     let jar = jar.remove(Cookie::build(SESSION_COOKIE).path("/"));
-    if let Some(oidc) = &st.oidc {
-        let home = format!("{}/", st.ctx.config.base_url.clone().unwrap_or_default());
+    if let Some(oidc) = st.oidc() {
+        let home = format!("{}/", st.ctx.base_url().unwrap_or_default());
         if let Some(url) = oidc.logout_url(user.id_token.as_deref(), &home).await {
             return Ok((jar, Redirect::to(&url)).into_response());
         }
@@ -159,7 +159,7 @@ pub async fn logout(State(st): State<AppState>, user: CurrentUser, jar: CookieJa
 }
 
 pub async fn oidc_login(State(st): State<AppState>, jar: CookieJar, Query(q): Query<NextQuery>) -> AppResult<Response> {
-    let oidc = st.oidc.clone().ok_or_else(AppError::not_found)?;
+    let oidc = st.oidc().ok_or_else(AppError::not_found)?;
     let (url, state) = oidc.begin(&safe_next(q.next.as_deref())).await.map_err(|e| {
         tracing::error!(error = %e, "OIDC discovery failed");
         AppError(StatusCode::BAD_GATEWAY, "The identity provider is unreachable.".into())
@@ -168,7 +168,7 @@ pub async fn oidc_login(State(st): State<AppState>, jar: CookieJar, Query(q): Qu
         .path("/auth/oidc")
         .http_only(true)
         .same_site(SameSite::Lax)
-        .secure(st.ctx.config.secure_cookies())
+        .secure(st.ctx.secure_cookies())
         .max_age(time::Duration::minutes(10))
         .build();
     Ok((jar.add(cookie), Redirect::to(&url)).into_response())
@@ -183,7 +183,7 @@ pub struct CallbackQuery {
 }
 
 pub async fn oidc_callback(State(st): State<AppState>, jar: CookieJar, Query(q): Query<CallbackQuery>) -> AppResult<Response> {
-    let oidc = st.oidc.clone().ok_or_else(AppError::not_found)?;
+    let oidc = st.oidc().ok_or_else(AppError::not_found)?;
     let fail = |msg: String| login_page_response(&st, StatusCode::UNAUTHORIZED, "/admin", "", Some(msg));
     if let Some(err) = q.error {
         return fail(format!("Identity provider returned an error: {}", q.error_description.unwrap_or(err)));

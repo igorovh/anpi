@@ -100,6 +100,38 @@
   {% endif %}
 </section>
 
+<section class="card fade" id="sso">
+  <h3>Single sign-on (OpenID Connect / Keycloak)</h3>
+  {% if sso_source == "env" %}
+  <p>SSO is <strong>on</strong> and configured through environment variables (<code>ANPI_OIDC_*</code>) on the server. Change it there.</p>
+  {% if let Some(r) = sso_redirect %}<p class="muted">Redirect URI for your provider:</p><pre class="copy" data-copy>{{ r }}</pre>{% endif %}
+  {% else %}
+  <p class="muted">When SSO is on, password sign-in is turned off and everyone signs in through your identity provider.
+    {% if sso_source == "panel" %}<strong class="s-up">SSO is on.</strong>{% else %}SSO is off.{% endif %}
+    If you ever get locked out, run <code>anpi disable-sso</code> on the server.</p>
+  <form method="post" action="/admin/sso" class="form" data-sso-form>
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+    <label>Public URL of this page<span class="hint">e.g. https://status.example.com; used for the redirect address</span><input name="base_url" value="{{ sso_panel.base_url }}" placeholder="https://status.example.com" spellcheck="false"></label>
+    <div class="row">
+      <label class="grow">Issuer URL<span class="hint">Keycloak: https://auth.example.com/realms/&lt;realm&gt;</span><input name="issuer" value="{{ sso_panel.issuer }}" spellcheck="false"></label>
+      <label>Client ID<input name="client_id" value="{{ sso_panel.client_id }}" spellcheck="false"></label>
+    </div>
+    <div class="row">
+      <label class="grow">Client secret<span class="hint">{% if sso_has_secret %}stored; leave empty to keep it{% else %}empty for public clients{% endif %}</span><input type="password" name="client_secret" autocomplete="new-password" placeholder="{% if sso_has_secret %}•••••••• (unchanged){% endif %}"></label>
+      <label>Required role or group<span class="hint">optional</span><input name="required_role" value="{{ sso_panel.required_role }}" placeholder="monitoring"></label>
+      <label>Scopes<span class="hint">default: openid profile email</span><input name="scopes" value="{{ sso_panel.scopes }}" placeholder="openid profile email"></label>
+    </div>
+    {% if let Some(r) = sso_redirect %}<p class="muted small">Add this redirect URI in your provider: <code>{{ r }}</code></p>{% endif %}
+    <label class="check"><input type="checkbox" name="enabled"{% if sso_panel.enabled %} checked{% endif %}> Use SSO and turn off password sign-in</label>
+    <div class="test-result" id="sso-result" hidden aria-live="polite"></div>
+    <div class="form-actions">
+      <button type="submit" class="btn primary">Save</button>
+      <button type="button" class="btn" data-sso-test>Test connection</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+
 {% if !sso %}
 <form method="post" action="/admin/account/password" class="form card fade">
   <input type="hidden" name="csrf" value="{{ layout.csrf }}">

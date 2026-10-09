@@ -4,7 +4,8 @@ A lightweight uptime monitor written in Rust. One ~10 MB binary with an embedded
 
 ## Features
 
-- **Monitors:** HTTP(S), TCP port, ping (ICMP), DNS and push (cron heartbeats).
+- **Monitors:** HTTP(S), WebSocket (ws/wss, optionally sending a message and checking the reply), TCP port, ping (ICMP), DNS and push (cron heartbeats).
+- **Run check now:** try a monitor's settings from the form before saving; it shows the status, timings and the start of the response.
 - **IPv4 / IPv6 / auto per monitor.** Auto tries every address and records which one answered, so a broken IPv6 path shows up instead of hiding behind a fallback.
 - **Response time broken into phases:** DNS, connect, TLS, server wait and transfer, with 24 h / 7 d / 30 d charts.
 - **Noise control:** a monitor is marked down only after N failures in a row, and checks are retried at a shorter interval while failing.
@@ -17,7 +18,7 @@ A lightweight uptime monitor written in Rust. One ~10 MB binary with an embedded
 - **Public status page at `/`** with 30-day uptime bars and incidents, plus `/api/status.json`.
 - **Live updates** over server-sent events.
 - **Data retention:** raw checks for 24 h, then hourly roll-ups for a year. A few dozen monitors stay well under 100 MB.
-- **Sign-in:** local accounts (argon2) or Keycloak / any OIDC provider. With OIDC enabled, only SSO sign-in is allowed.
+- **Sign-in:** local accounts (argon2) or Keycloak / any OIDC provider. SSO can be set in Settings → Single sign-on or through environment variables. With SSO on, only SSO sign-in is allowed.
 - **Import** from an Uptime Kuma backup JSON.
 
 ## Quick start
@@ -65,6 +66,8 @@ All configuration is through environment variables. Monitors, alerts and retenti
 
 ### Keycloak
 
+You can set SSO in **Settings → Single sign-on**. The panel refuses to turn it on unless the provider answers, and `anpi disable-sso` switches it off from the server if you get locked out. Environment variables, when set, take precedence and lock the panel section.
+
 1. Create an OpenID Connect client `anpi` with **Client authentication** on and **Standard flow** enabled.
 2. Set **Valid redirect URIs** to `https://status.example.com/auth/oidc/callback` and **Valid post logout redirect URIs** to `https://status.example.com/`.
 3. Optional: create a realm role such as `monitoring`, assign it to people who may use the panel, and set `ANPI_OIDC_REQUIRED_ROLE=monitoring`. Client roles (`resource_access.anpi.roles`) and groups also work.
@@ -91,6 +94,7 @@ ICMP needs either `CAP_NET_RAW` (granted in the systemd unit) or unprivileged IC
 anpi                          # run the server
 anpi healthcheck              # exit 0 if the local server is healthy (used by Docker)
 anpi reset-password <user>    # reads a new password from stdin, signs out old sessions
+anpi disable-sso              # turns off SSO configured in the panel
 ```
 
 ## Development

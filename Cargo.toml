@@ -12,7 +12,7 @@ axum = { version = "0.8.9", features = ["macros", "multipart"] }
 axum-extra = { version = "0.12.6", features = ["cookie", "form", "typed-header"] }
 base64 = "0.23.1"
 bytes = "1.12.1"
-futures-util = "0.3.34"
+futures-util = { version = "0.3.34", features = ["sink"] }
 hex = "0.4.3"
 hickory-resolver = "0.26.3"
 http = "1.5.0"
@@ -36,6 +36,7 @@ thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1.53.2", features = ["full"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["trace", "set-header", "compression-gzip", "timeout", "limit"] }

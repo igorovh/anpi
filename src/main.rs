@@ -8,7 +8,8 @@ use tracing_subscriber::EnvFilter;
 const USAGE: &str = "usage:
   anpi                          start the server
   anpi healthcheck              exit 0 if the local server answers /healthz
-  anpi reset-password <user>    set a new password (read from stdin)";
+  anpi reset-password <user>    set a new password (read from stdin)
+  anpi disable-sso              turn off SSO set in the panel so passwords work again";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -31,6 +32,7 @@ async fn main() -> ExitCode {
             Some(user) => reset_password(&config, user).await,
             None => Err(anyhow::anyhow!(USAGE)),
         },
+        Some("disable-sso") => disable_sso(&config).await,
         Some(_) => Err(anyhow::anyhow!(USAGE)),
     };
     match result {
@@ -49,6 +51,16 @@ async fn healthcheck(config: &Config) -> anyhow::Result<()> {
     spec.timeout = Duration::from_secs(5);
     let r = anpi::checks::http::send(&spec).await?;
     anyhow::ensure!(r.status == 200, "unhealthy: HTTP {}", r.status);
+    Ok(())
+}
+
+async fn disable_sso(config: &Config) -> anyhow::Result<()> {
+    if config.oidc.is_some() {
+        anyhow::bail!("SSO is set through ANPI_OIDC_* environment variables; remove them instead");
+    }
+    let db = anpi::db::open(&config.database_path).await?;
+    anpi::auth::sso::disable(&db).await?;
+    eprintln!("SSO turned off; restart anpi and sign in with a password (see `anpi reset-password` if needed)");
     Ok(())
 }
 

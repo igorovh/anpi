@@ -22,12 +22,12 @@
       </label>
       <label class="grow">Name<input name="name" value="{{ f.name }}" required maxlength="100"></label>
     </div>
-    <label data-kinds="http">URL<input name="url" value="{{ f.url }}" placeholder="https://example.com/health" spellcheck="false"></label>
+    <label data-kinds="http websocket">URL<input name="url" value="{{ f.url }}" placeholder="https://example.com/health or wss://example.com/socket" spellcheck="false"></label>
     <div class="row" data-kinds="tcp ping dns">
       <label class="grow"><span data-kinds="tcp ping">Host</span><span data-kinds="dns">Domain name</span><input name="host" value="{{ f.host }}" placeholder="example.com" spellcheck="false"></label>
       <label data-kinds="tcp">Port<input name="port" value="{{ f.port }}" inputmode="numeric" size="6"></label>
     </div>
-    <div class="row" data-kinds="http tcp ping">
+    <div class="row" data-kinds="http websocket tcp ping">
       <label>IP version
         <select name="ip_family">
           <option value="auto"{% if f.ip_family == "auto" %} selected{% endif %}>Auto (IPv6, then IPv4)</option>
@@ -38,19 +38,19 @@
     </div>
   </fieldset>
 
-  <fieldset data-kinds="http tcp ping dns push">
+  <fieldset data-kinds="http websocket tcp ping dns push">
     <legend>Timing</legend>
     <div class="row">
-      <label><span data-kinds="http tcp ping dns">Check every (s)</span><span data-kinds="push">Expect a push every (s)</span><input name="interval_s" value="{{ f.interval_s }}" inputmode="numeric" size="7"></label>
-      <label data-kinds="http tcp ping dns">Retry every (s)<span class="hint">while failing</span><input name="retry_interval_s" value="{{ f.retry_interval_s }}" inputmode="numeric" size="7"></label>
-      <label data-kinds="http tcp ping dns">Timeout (s)<input name="timeout_s" value="{{ f.timeout_s }}" inputmode="numeric" size="5"></label>
+      <label><span data-kinds="http websocket tcp ping dns">Check every (s)</span><span data-kinds="push">Expect a push every (s)</span><input name="interval_s" value="{{ f.interval_s }}" inputmode="numeric" size="7"></label>
+      <label data-kinds="http websocket tcp ping dns">Retry every (s)<span class="hint">while failing</span><input name="retry_interval_s" value="{{ f.retry_interval_s }}" inputmode="numeric" size="7"></label>
+      <label data-kinds="http websocket tcp ping dns">Timeout (s)<input name="timeout_s" value="{{ f.timeout_s }}" inputmode="numeric" size="5"></label>
       <label>Down after<span class="hint">failures in a row</span><input name="failure_threshold" value="{{ f.failure_threshold }}" inputmode="numeric" size="4"></label>
     </div>
   </fieldset>
 
-  <fieldset data-kinds="http">
-    <legend>HTTP</legend>
-    <div class="row">
+  <fieldset data-kinds="http websocket">
+    <legend><span data-kinds="http">HTTP request</span><span data-kinds="websocket">WebSocket</span></legend>
+    <div class="row" data-kinds="http">
       <label>Method
         <select name="method">
           {% for meth in ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] %}<option{% if f.is_method(meth) %} selected{% endif %}>{{ meth }}</option>{% endfor %}
@@ -59,25 +59,30 @@
       <label class="grow">Accepted status codes<span class="hint">e.g. 200-299, 301, 4xx</span><input name="expected_status" value="{{ f.expected_status }}"></label>
     </div>
     <label>Headers<span class="hint">one per line, Name: value</span><textarea name="headers" rows="3" spellcheck="false">{{ f.headers }}</textarea></label>
-    <label>Body<textarea name="body" rows="3" spellcheck="false">{{ f.body }}</textarea></label>
+    <label><span data-kinds="http">Request body</span><span data-kinds="websocket">Message to send after connecting<span class="hint">optional; the first reply is checked</span></span><textarea name="body" rows="3" spellcheck="false">{{ f.body }}</textarea></label>
     <div class="row checks-row">
-      <label class="check"><input type="checkbox" name="follow_redirects"{% if f.follow_redirects.is_some() %} checked{% endif %}> Follow redirects</label>
+      <label class="check" data-kinds="http"><input type="checkbox" name="follow_redirects"{% if f.follow_redirects.is_some() %} checked{% endif %}> Follow redirects</label>
       <label class="check"><input type="checkbox" name="ignore_tls"{% if f.ignore_tls.is_some() %} checked{% endif %}> Ignore TLS errors</label>
     </div>
+  </fieldset>
+
+  <fieldset data-kinds="http websocket">
+    <legend><span data-kinds="http">Expected response</span><span data-kinds="websocket">Expected reply</span></legend>
     <div class="row">
-      <label>Response check
+      <label>Check
         <select name="content_kind">
-          <option value="none"{% if f.content_kind == "none" %} selected{% endif %}>Status code only</option>
-          <option value="contains"{% if f.content_kind == "contains" %} selected{% endif %}>Body contains</option>
-          <option value="not_contains"{% if f.content_kind == "not_contains" %} selected{% endif %}>Body does not contain</option>
-          <option value="regex"{% if f.content_kind == "regex" %} selected{% endif %}>Body matches regex</option>
+          <option value="none"{% if f.content_kind == "none" %} selected{% endif %}>Nothing more</option>
+          <option value="contains"{% if f.content_kind == "contains" %} selected{% endif %}>Contains text</option>
+          <option value="not_contains"{% if f.content_kind == "not_contains" %} selected{% endif %}>Does not contain text</option>
+          <option value="regex"{% if f.content_kind == "regex" %} selected{% endif %}>Matches regex</option>
           <option value="json_path"{% if f.content_kind == "json_path" %} selected{% endif %}>JSON field (JSONPath)</option>
         </select>
       </label>
-      <label class="grow">Keyword / pattern / path<span class="hint">e.g. $.status</span><input name="content_value" value="{{ f.content_value }}" spellcheck="false"></label>
+      <label class="grow">Text / pattern / path<span class="hint">e.g. "ok" or $.status</span><input name="content_value" value="{{ f.content_value }}" spellcheck="false"></label>
       <label>Expected value<span class="hint">JSONPath only; empty = must exist</span><input name="content_expected" value="{{ f.content_expected }}"></label>
     </div>
-    <label class="narrow">Warn before certificate expiry (days)<span class="hint">0 disables</span><input name="ssl_warn_days" value="{{ f.ssl_warn_days }}" inputmode="numeric" size="4"></label>
+    <p class="muted small" data-kinds="http">The status code is always checked against “Accepted status codes”.</p>
+    <label class="narrow">Warn before certificate expiry (days)<span class="hint">0 disables; https and wss only</span><input name="ssl_warn_days" value="{{ f.ssl_warn_days }}" inputmode="numeric" size="4"></label>
   </fieldset>
 
   <fieldset data-kinds="dns">
@@ -93,7 +98,7 @@
     </div>
   </fieldset>
 
-  <fieldset data-kinds="http tcp ping dns push">
+  <fieldset data-kinds="http websocket tcp ping dns push">
     <legend>Notifications</legend>
     {% if channels.is_empty() %}
     <p class="muted">No channels yet. <a href="/admin/notifications/new">Add one</a> to get alerts.</p>
@@ -128,8 +133,10 @@
     </div>
   </fieldset>
 
+  <div class="test-result" id="test-result" hidden aria-live="polite"></div>
   <div class="form-actions">
     <button type="submit" class="btn primary">Save</button>
+    <button type="button" class="btn" data-run-check data-kinds="http websocket tcp ping dns">Run check now</button>
     <a class="btn" href="{% if let Some(id) = id %}/admin/monitors/{{ id }}{% else %}/admin{% endif %}">Cancel</a>
   </div>
 </form>

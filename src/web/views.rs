@@ -1,4 +1,4 @@
-use crate::models::{Heartbeat, Status};
+use crate::models::{ContentKind, Heartbeat, IpFamily, Monitor, MonitorKind, Status};
 use crate::util::{DAY_MS, format_ms, format_pct, format_ts};
 
 use super::{CurrentUser, asset_version};
@@ -171,6 +171,92 @@ pub fn cert_info(expires_at: Option<i64>, now: i64) -> Option<(String, &'static 
     Some((text, class))
 }
 
+fn is_secret_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["authorization", "cookie", "token", "secret", "key", "password"].iter().any(|s| n.contains(s))
+}
+
+pub fn masked_headers(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| match l.split_once(':') {
+            Some((k, _)) if is_secret_header(k) => format!("{}: ••••••", k.trim()),
+            _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn describe_expectation(m: &Monitor) -> String {
+    let v = &m.content_value;
+    let what = if m.kind() == MonitorKind::WebSocket { "reply" } else { "body" };
+    match m.content_kind() {
+        ContentKind::None if m.kind() == MonitorKind::WebSocket => "handshake succeeds".into(),
+        ContentKind::None => "status code only".into(),
+        ContentKind::Contains => format!("{what} contains “{v}”"),
+        ContentKind::NotContains => format!("{what} does not contain “{v}”"),
+        ContentKind::Regex => format!("{what} matches /{v}/"),
+        ContentKind::JsonPath if m.content_expected.is_empty() => format!("JSON {v} exists"),
+        ContentKind::JsonPath => format!("JSON {v} = {}", m.content_expected),
+    }
+}
+
+/// Human-readable description of exactly what a monitor checks.
+pub fn check_facts(m: &Monitor) -> Vec<(&'static str, String)> {
+    let mut f: Vec<(&'static str, String)> = vec![("Type", m.kind().label().to_string())];
+    let yes_no = |b: bool| if b { "yes" } else { "no" }.to_string();
+    match m.kind() {
+        MonitorKind::Http => {
+            f.push(("Request", format!("{} {}", m.method, m.target)));
+            if !m.headers.trim().is_empty() {
+                f.push(("Headers", masked_headers(&m.headers)));
+            }
+            if !m.body.is_empty() {
+                f.push(("Body", m.body.chars().take(200).collect()));
+            }
+            f.push(("Accepted codes", m.expected_status.clone()));
+            f.push(("Expects", describe_expectation(m)));
+            f.push(("Follow redirects", yes_no(m.follow_redirects)));
+        }
+        MonitorKind::WebSocket => {
+            f.push(("URL", m.target.clone()));
+            if !m.headers.trim().is_empty() {
+                f.push(("Headers", masked_headers(&m.headers)));
+            }
+            f.push(("Sends", if m.body.is_empty() { "nothing".into() } else { m.body.chars().take(200).collect() }));
+            f.push(("Expects", describe_expectation(m)));
+        }
+        MonitorKind::Tcp => f.push(("Connects to", format!("{}:{}", m.target, m.port.unwrap_or(0)))),
+        MonitorKind::Ping => f.push(("Pings", m.target.clone())),
+        MonitorKind::Dns => {
+            f.push(("Query", format!("{} {}", m.dns_record_type, m.target)));
+            f.push(("Resolver", if m.dns_server.is_empty() { "system".into() } else { m.dns_server.clone() }));
+            if !m.content_expected.is_empty() {
+                f.push(("Expects", format!("a record containing {}", m.content_expected)));
+            }
+        }
+        MonitorKind::Push => f.push(("Expects", format!("a push at least every {}s", m.interval_s))),
+        MonitorKind::Aggregate => f.push(("Shows", "the worst status of its sub-monitors".into())),
+    }
+    if matches!(m.kind(), MonitorKind::Http | MonitorKind::WebSocket | MonitorKind::Tcp | MonitorKind::Ping) {
+        f.push(("IP version", match m.ip_family() { IpFamily::Auto => "auto (IPv6, then IPv4)", IpFamily::V4 => "IPv4 only", IpFamily::V6 => "IPv6 only" }.into()));
+    }
+    if matches!(m.kind(), MonitorKind::Http | MonitorKind::WebSocket) {
+        f.push(("TLS", if m.ignore_tls { "errors ignored".into() } else { "verified".into() }));
+        f.push(("Certificate warning", if m.ssl_warn_days > 0 { format!("{} days before expiry", m.ssl_warn_days) } else { "off".into() }));
+    }
+    if !matches!(m.kind(), MonitorKind::Push | MonitorKind::Aggregate) {
+        f.push(("Interval", format!("every {}s, every {}s while failing", m.interval_s, m.retry_interval_s)));
+        f.push(("Timeout", format!("{}s", m.timeout_s)));
+    }
+    if m.kind() != MonitorKind::Aggregate {
+        let n = m.failure_threshold;
+        f.push(("Down after", format!("{n} failed check{} in a row", if n == 1 { "" } else { "s" })));
+    }
+    f
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +325,32 @@ mod tests {
         let out = nest(vec![r(1, None), r(2, Some(1)), r(3, Some(99)), r(4, Some(1))], |x| x.id, |x| x.parent, |x| &mut x.kids);
         assert_eq!(out.iter().map(|x| x.id).collect::<Vec<_>>(), vec![1, 3], "orphan 3 stays top-level");
         assert_eq!(out[0].kids.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2, 4], "children keep their order");
+    }
+
+    #[test]
+    fn secret_header_values_are_masked() {
+        let out = masked_headers("Authorization: Bearer abc\nX-Api-Key: k\nAccept: application/json");
+        assert_eq!(out, "Authorization: ••••••\nX-Api-Key: ••••••\nAccept: application/json");
+    }
+
+    #[test]
+    fn check_description_spells_out_request_and_expectation() {
+        let mut input = crate::models::MonitorInput::http("API", "https://api.example.com/health");
+        input.content_kind = "json_path".into();
+        input.content_value = "$.status".into();
+        input.content_expected = "ok".into();
+        let facts = check_facts(&Monitor::draft(&input));
+        let get = |k: &str| facts.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        assert_eq!(get("Request"), "GET https://api.example.com/health");
+        assert_eq!(get("Expects"), "JSON $.status = ok");
+        assert_eq!(get("Interval"), "every 60s, every 30s while failing");
+        assert_eq!(get("Down after"), "3 failed checks in a row");
+
+        input.kind = "websocket".into();
+        input.content_kind = "none".into();
+        let facts = check_facts(&Monitor::draft(&input));
+        assert!(facts.iter().any(|(k, v)| *k == "Expects" && v == "handshake succeeds"));
+        assert!(facts.iter().any(|(k, v)| *k == "Sends" && v == "nothing"));
     }
 
     #[test]

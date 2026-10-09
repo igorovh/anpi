@@ -33,9 +33,10 @@ pub async fn build(config: Config, db: db::Db) -> anyhow::Result<App> {
     let ctx = Ctx::new(db, config);
     ctx.maintenance.reload(&ctx.db, util::now_ms()).await?;
     ctx.reload_branding().await?;
+    ctx.reload_auth().await?;
     let scheduler = Scheduler::new(ctx.clone());
     let state = web::AppState::new(ctx.clone(), scheduler.clone());
-    if !ctx.config.sso_only() && store::users::count(&ctx.db).await? == 0 {
+    if ctx.auth().oidc.is_none() && store::users::count(&ctx.db).await? == 0 {
         let code = util::random_token(9);
         tracing::warn!("no accounts yet: open /setup and enter setup code {code}");
         *state.setup_code.lock().expect("setup lock") = Some(code);

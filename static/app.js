@@ -60,6 +60,55 @@
     });
   });
 
+  // "Run check now": runs the unsaved form through the real checker.
+  document.querySelectorAll("[data-run-check]").forEach(function (btn) {
+    var form = btn.closest("form");
+    var box = document.getElementById("test-result");
+    btn.addEventListener("click", function () {
+      var esc = function (v) { var d = document.createElement("div"); d.textContent = v == null ? "" : String(v); return d.innerHTML; };
+      btn.disabled = true;
+      box.hidden = false;
+      box.className = "test-result";
+      box.textContent = "Running…";
+      fetch("/admin/monitors/test", { method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          if (res.error) { box.className = "test-result bad"; box.innerHTML = "<strong>Not run:</strong> " + esc(res.error); return; }
+          var html = '<p class="test-head"><span class="status ' + (res.ok ? "s-up" : "s-down") + '"><span class="dot"></span>' + (res.ok ? "Would be up" : "Would fail") + "</span> " + esc(res.message) + "</p>";
+          var facts = [];
+          if (res.status_code) facts.push("Status " + esc(res.status_code));
+          if (res.remote_ip) facts.push("IP " + esc(res.remote_ip));
+          (res.timings || []).forEach(function (t) { facts.push(esc(t[0]) + " " + esc(t[1])); });
+          if (res.cert) facts.push("Certificate " + esc(res.cert));
+          if (facts.length) html += '<p class="muted">' + facts.join(" · ") + "</p>";
+          if (res.preview) html += "<pre>" + esc(res.preview) + "</pre>";
+          box.className = "test-result " + (res.ok ? "good" : "bad");
+          box.innerHTML = html;
+        })
+        .catch(function () { box.className = "test-result bad"; box.textContent = "Request failed."; })
+        .then(function () { btn.disabled = false; });
+    });
+  });
+
+  document.querySelectorAll("[data-sso-test]").forEach(function (btn) {
+    var form = btn.closest("form");
+    var box = document.getElementById("sso-result");
+    btn.addEventListener("click", function () {
+      btn.disabled = true;
+      box.hidden = false;
+      box.className = "test-result";
+      box.textContent = "Contacting the identity provider…";
+      fetch("/admin/sso/test", { method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+          box.className = "test-result " + (res.ok ? "good" : "bad");
+          box.textContent = res.message;
+        })
+        .catch(function () { box.className = "test-result bad"; box.textContent = "Request failed."; })
+        .then(function () { btn.disabled = false; });
+    });
+  });
+
   document.querySelectorAll("[data-show]").forEach(function (b) {
     b.addEventListener("click", function () {
       var el = document.getElementById(b.dataset.show);

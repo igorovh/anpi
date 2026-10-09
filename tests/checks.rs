@@ -141,3 +141,46 @@ async fn tcp_check_distinguishes_open_and_closed_ports() {
     assert!(!closed.ok);
     assert!(closed.message.starts_with("connect:"), "{}", closed.message);
 }
+
+#[tokio::test]
+async fn websocket_handshake_message_and_reply_check() {
+    let addr = common::ws_echo_server().await;
+    let ws = |send: &str, kind: &str, value: &str| MonitorInput {
+        kind: "websocket".into(),
+        body: send.into(),
+        content_kind: kind.into(),
+        content_value: value.into(),
+        ..http(&format!("ws://{addr}/socket"))
+    };
+
+    let plain = checks::run(&monitor(ws("", "none", "")).await).await;
+    assert!(plain.ok, "{}", plain.message);
+    assert_eq!(plain.status_code, Some(101));
+    assert!(plain.timings.ttfb_ms.is_some(), "handshake time is recorded");
+
+    let echo = checks::run(&monitor(ws("ping", "contains", "echo: ping")).await).await;
+    assert!(echo.ok, "{}", echo.message);
+    assert_eq!(echo.preview.as_deref(), Some("echo: ping"));
+
+    let wrong = checks::run(&monitor(ws("ping", "contains", "pong")).await).await;
+    assert!(!wrong.ok && wrong.message.contains("pong"), "{}", wrong.message);
+
+    // Waiting for a reply that never comes ends at the timeout and says so.
+    let silent = checks::run(&monitor(MonitorInput { timeout_s: 1, ..ws("", "contains", "x") }).await).await;
+    assert!(!silent.ok && silent.message.contains("waiting for a message"), "{}", silent.message);
+
+    let refused = checks::run(&monitor(MonitorInput { target: "ws://127.0.0.1:9/".into(), ..ws("", "none", "") }).await).await;
+    assert!(!refused.ok && refused.message.starts_with("connect:"), "{}", refused.message);
+}
+
+#[tokio::test]
+async fn secure_websocket_verifies_tls() {
+    // The TLS test server answers plain HTTP, so the WebSocket upgrade itself fails after TLS succeeds.
+    let (addr, expires) = tls_server(30).await;
+    let url = format!("wss://localhost:{}/", addr.port());
+    let strict = checks::run(&monitor(MonitorInput { kind: "websocket".into(), ..http(&url) }).await).await;
+    assert!(strict.message.starts_with("TLS: invalid certificate"), "{}", strict.message);
+    let lenient = checks::run(&monitor(MonitorInput { kind: "websocket".into(), ignore_tls: true, ..http(&url) }).await).await;
+    assert!(lenient.message.starts_with("handshake:"), "{}", lenient.message);
+    assert_eq!(lenient.cert_expires_at, Some(expires), "certificate is read even when the upgrade fails");
+}

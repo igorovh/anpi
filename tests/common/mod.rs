@@ -287,3 +287,24 @@ pub async fn signed_in(app: &anpi::App) -> Client {
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
     c
 }
+
+/// WebSocket server that echoes text messages, prefixed with "echo: ".
+pub async fn ws_echo_server() -> SocketAddr {
+    use futures_util::{SinkExt, StreamExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((tcp, _)) = listener.accept().await else { return };
+            tokio::spawn(async move {
+                let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else { return };
+                while let Some(Ok(msg)) = ws.next().await {
+                    if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
+                        let _ = ws.send(tokio_tungstenite::tungstenite::Message::text(format!("echo: {t}"))).await;
+                    }
+                }
+            });
+        }
+    });
+    addr
+}

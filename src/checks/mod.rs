@@ -4,6 +4,7 @@ pub mod http;
 pub mod ping;
 pub mod status_codes;
 pub mod tcp;
+pub mod ws;
 
 use std::time::Duration;
 
@@ -32,6 +33,24 @@ pub async fn run(m: &Monitor) -> CheckOutcome {
         MonitorKind::Dns => dns::check(&m.target, &m.dns_record_type, &m.dns_server, &m.content_expected, timeout).await,
         MonitorKind::Push => CheckOutcome::fail("push monitors are not actively checked"),
         MonitorKind::Aggregate => CheckOutcome::fail("aggregate monitors are not checked"),
+        MonitorKind::WebSocket => {
+            let headers = match parse_headers(&m.headers) {
+                Ok(h) => h,
+                Err(e) => return CheckOutcome::fail(e),
+            };
+            ws::check(ws::WsSpec {
+                url: &m.target,
+                headers,
+                send: &m.body,
+                content_kind: m.content_kind(),
+                content_value: &m.content_value,
+                content_expected: &m.content_expected,
+                ip_family: m.ip_family(),
+                ignore_tls: m.ignore_tls,
+                timeout,
+            })
+            .await
+        }
     }
 }
 
@@ -68,6 +87,7 @@ async fn http_check(m: &Monitor, timeout: Duration) -> CheckOutcome {
         Ok(r) => {
             let mut out = CheckOutcome {
                 ok: true,
+                preview: Some(r.text().chars().take(600).collect()),
                 status_code: Some(r.status),
                 timings: r.timings.clone(),
                 remote_ip: Some(r.remote_ip.to_string()),

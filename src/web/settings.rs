@@ -8,7 +8,9 @@ use serde::Deserialize;
 use super::auth_routes::CsrfForm;
 use super::views::Layout;
 use super::{AppError, AppResult, AppState, CurrentUser, render};
+use crate::auth::oidc::Oidc;
 use crate::auth::password;
+use crate::auth::sso::{PanelSso, SsoSource, normalize_base_url};
 use crate::kuma::{self, ImportReport};
 use crate::store::{self, settings::AppSettings};
 use crate::util::{format_ts, now_ms, parse_local_datetime};
@@ -130,6 +132,10 @@ pub struct GroupRow {
 struct SettingsPage {
     layout: Layout,
     s: AppSettings,
+    sso_source: &'static str,
+    sso_panel: PanelSso,
+    sso_has_secret: bool,
+    sso_redirect: Option<String>,
     groups: Vec<GroupRow>,
     users: Vec<UserRow>,
     sso: bool,
@@ -161,12 +167,24 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
         .map(|g| GroupRow { monitors: monitors.iter().filter(|m| m.group_id == Some(g.id)).count(), id: g.id, name: g.name, sort_order: g.sort_order })
         .collect();
     let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+    let auth = st.ctx.auth();
+    let mut sso_panel = PanelSso::load(st.db()).await?;
+    let sso_has_secret = !sso_panel.client_secret.is_empty();
+    sso_panel.client_secret.clear();
     let page = SettingsPage {
         layout: Layout::admin("Settings", user, "settings").with_notice(notice),
         s,
+        sso_source: match auth.source {
+            SsoSource::Env => "env",
+            SsoSource::Panel => "panel",
+            SsoSource::Off => "off",
+        },
+        sso_redirect: auth.base_url.map(|b| format!("{b}/auth/oidc/callback")),
+        sso_panel,
+        sso_has_secret,
         groups,
         users,
-        sso: st.oidc.is_some(),
+        sso: st.oidc().is_some(),
         error,
         db_size: format!("{:.1} MB", pages.0 as f64 / 1_048_576.0),
     };
@@ -236,7 +254,7 @@ pub struct NewUserForm {
 
 pub async fn create_user(State(st): State<AppState>, user: CurrentUser, Form(f): Form<NewUserForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    if st.oidc.is_some() {
+    if st.oidc().is_some() {
         return Err(AppError::forbidden("Users are managed by the identity provider."));
     }
     let username = f.username.trim();
@@ -327,4 +345,85 @@ pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form
         }
         Err(e) => Ok((StatusCode::BAD_REQUEST, render(&ImportPage { layout, report: None, error: Some(e) })?).into_response()),
     }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct SsoForm {
+    csrf: String,
+    enabled: Option<String>,
+    base_url: String,
+    issuer: String,
+    client_id: String,
+    client_secret: String,
+    required_role: String,
+    scopes: String,
+}
+
+impl SsoForm {
+    /// Applies the form onto stored settings; an empty secret keeps the stored one.
+    fn apply(&self, mut panel: PanelSso) -> Result<PanelSso, String> {
+        panel.base_url = normalize_base_url(&self.base_url)?;
+        panel.issuer = self.issuer.trim().trim_end_matches('/').to_string();
+        panel.client_id = self.client_id.trim().to_string();
+        if !self.client_secret.trim().is_empty() {
+            panel.client_secret = self.client_secret.trim().to_string();
+        }
+        panel.required_role = self.required_role.trim().to_string();
+        panel.scopes = self.scopes.trim().to_string();
+        panel.enabled = self.enabled.is_some();
+        if panel.enabled {
+            if panel.base_url.is_empty() {
+                return Err("Public URL is required for SSO (it builds the redirect address)".into());
+            }
+            if panel.oidc_config().is_none() {
+                return Err("Issuer URL and client ID are required for SSO".into());
+            }
+        }
+        Ok(panel)
+    }
+}
+
+async fn probe(panel: &PanelSso) -> Result<String, String> {
+    let cfg = panel.oidc_config().ok_or("Issuer URL and client ID are required")?;
+    let base = if panel.base_url.is_empty() { "http://localhost".to_string() } else { panel.base_url.clone() };
+    let oidc = Oidc::new(cfg, format!("{base}/auth/oidc/callback"));
+    let d = oidc.discovery().await?;
+    Ok(format!("Connected to {}; sign-in goes to {}", d.issuer, d.authorization_endpoint))
+}
+
+pub async fn save_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SsoForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    if st.ctx.auth().source == SsoSource::Env {
+        return Err(AppError::forbidden("SSO is configured through environment variables on the server."));
+    }
+    let panel = match f.apply(PanelSso::load(st.db()).await?) {
+        Ok(p) => p,
+        Err(e) => return settings_response(&st, &user, None, None, Some(e)).await,
+    };
+    // Never switch password sign-in off unless the provider actually answers.
+    if panel.enabled
+        && let Err(e) = probe(&panel).await
+    {
+        let msg = format!("SSO was not enabled because the identity provider could not be reached: {e}");
+        return settings_response(&st, &user, None, None, Some(msg)).await;
+    }
+    panel.save(st.db()).await?;
+    st.ctx.reload_auth().await?;
+    tracing::warn!(user = %user.username, enabled = panel.enabled, "SSO settings changed");
+    Ok(Redirect::to("/admin/settings?notice=saved#sso").into_response())
+}
+
+pub async fn test_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SsoForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let mut panel = PanelSso::load(st.db()).await?;
+    let result = match (SsoForm { enabled: None, ..f }).apply(std::mem::take(&mut panel)) {
+        Ok(p) => probe(&p).await,
+        Err(e) => Err(e),
+    };
+    Ok(axum::Json(match result {
+        Ok(m) => serde_json::json!({ "ok": true, "message": m }),
+        Err(e) => serde_json::json!({ "ok": false, "message": e }),
+    })
+    .into_response())
 }

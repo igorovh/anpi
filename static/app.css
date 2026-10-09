@@ -364,3 +364,13 @@ p.small { font-size: 0.82rem; margin: -0.3rem 0 0.9rem; }
 .drop-out { display: none; padding: 1rem 2rem; text-align: center; color: var(--muted); font-size: 0.82rem; border-top: 1px dashed var(--faint); }
 .dragging .drop-out { display: block; }
 .page > .drop-error { margin: 0; }
+
+/* run check now */
+.test-result { margin: 0.4rem 0 1rem; padding: 0.8rem 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 2px; font-size: 0.88rem; }
+.test-result.good { box-shadow: inset 3px 0 0 var(--up); }
+.test-result.bad { box-shadow: inset 3px 0 0 var(--down); }
+.test-result .test-head { display: flex; gap: 0.8rem; align-items: baseline; flex-wrap: wrap; }
+.test-result .muted { margin-top: 0.3rem; }
+.test-result pre { margin-top: 0.6rem; max-height: 12rem; overflow: auto; padding: 0.6rem; background: var(--input); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-all; }
+.facts dd.pre { white-space: pre-wrap; word-break: break-word; }
+.card-link { margin-top: 1rem; font-size: 0.85rem; }

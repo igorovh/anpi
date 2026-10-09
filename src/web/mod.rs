@@ -50,7 +50,6 @@ pub fn asset_version() -> &'static str {
 pub struct AppState {
     pub ctx: Arc<Ctx>,
     pub scheduler: Arc<Scheduler>,
-    pub oidc: Option<Arc<Oidc>>,
     pub limiter: Arc<LoginLimiter>,
     /// One-time code printed to the log; required to create the first account.
     pub setup_code: Arc<Mutex<Option<String>>>,
@@ -58,19 +57,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(ctx: Arc<Ctx>, scheduler: Arc<Scheduler>) -> Self {
-        let oidc = ctx
-            .config
-            .oidc
-            .clone()
-            .zip(ctx.config.oidc_redirect_url())
-            .map(|(cfg, redirect)| Arc::new(Oidc::new(cfg, redirect)));
         Self {
             ctx,
             scheduler,
-            oidc,
             limiter: Arc::new(LoginLimiter::new(10, Duration::from_secs(15 * 60))),
             setup_code: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn oidc(&self) -> Option<Arc<Oidc>> {
+        self.ctx.auth().oidc
     }
 
     pub fn db(&self) -> &crate::db::Db {
@@ -82,7 +78,7 @@ impl AppState {
             .path("/")
             .http_only(true)
             .same_site(SameSite::Lax)
-            .secure(self.ctx.config.secure_cookies())
+            .secure(self.ctx.secure_cookies())
             .max_age(time::Duration::milliseconds(store::users::SESSION_TTL_MS))
             .build()
     }
@@ -271,6 +267,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/events", get(admin::events))
         .route("/admin/monitors/new", get(admin::new_monitor))
         .route("/admin/monitors", post(admin::create_monitor))
+        .route("/admin/monitors/test", post(admin::test_monitor))
         .route("/admin/monitors/{id}", get(admin::monitor_detail).post(admin::update_monitor))
         .route("/admin/monitors/{id}/edit", get(admin::edit_monitor))
         .route("/admin/monitors/{id}/toggle", post(admin::toggle_monitor))
@@ -286,6 +283,8 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings", get(settings::settings_page).post(settings::save_settings))
         .route("/admin/users", post(settings::create_user))
         .route("/admin/branding", post(branding::save_site_name))
+        .route("/admin/sso", post(settings::save_sso))
+        .route("/admin/sso/test", post(settings::test_sso))
         .route(
             "/admin/branding/logo",
             post(branding::upload_logo).layer(axum::extract::DefaultBodyLimit::max(branding::MAX_LOGO_BYTES + 64 * 1024)),

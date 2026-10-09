@@ -85,16 +85,14 @@
     {% endif %}
   </div>
   <div class="card">
-    <h3>Settings</h3>
+    <h3>Check</h3>
     <dl class="facts">
-      <dt>Interval</dt><dd>{{ m.interval_s }}s (retry {{ m.retry_interval_s }}s)</dd>
-      <dt>Timeout</dt><dd>{{ m.timeout_s }}s</dd>
-      <dt>Down after</dt><dd>{{ m.failure_threshold }} failed check{% if m.failure_threshold != 1 %}s{% endif %} in a row</dd>
-      {% if m.kind == "http" %}<dt>Accepted codes</dt><dd>{{ m.expected_status }}</dd>{% endif %}
+      {% for (k, v) in facts %}<dt>{{ k }}</dt><dd class="pre">{{ v }}</dd>{% endfor %}
       <dt>Notifies</dt><dd>{% if channels.is_empty() %}<span class="muted">nobody</span>{% else %}{{ channels|join(", ") }}{% endif %}</dd>
       <dt>Group</dt><dd>{% if let Some(g) = group %}{{ g }}{% else %}<span class="muted">none</span>{% endif %}</dd>
       <dt>Public</dt><dd>{% if m.public %}yes{% if !m.public_name.is_empty() %}, as “{{ m.public_name }}”{% endif %}{% else %}no{% endif %}</dd>
     </dl>
+    <p class="card-link"><a href="/admin/monitors/{{ m.id }}/edit">Change these settings</a></p>
   </div>
 </section>
 

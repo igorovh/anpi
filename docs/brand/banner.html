@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- Source for docs/brand/banner-*.png; render at 1280x400 with ?theme=dark or ?theme=light. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: Plex; font-weight: 400; src: url(../../static/fonts/plex-400-latin.woff2) format("woff2"); }
+  @font-face { font-family: Plex; font-weight: 500; src: url(../../static/fonts/plex-500-latin.woff2) format("woff2"); }
+  @font-face { font-family: Plex; font-weight: 300; src: url(../../static/fonts/plex-300-latin.woff2) format("woff2"); }
+  :root { --bg: #111110; --ink: #dddbd4; --muted: #81807c; --line: #2b2a29; --up: #8fb07f; --down: #d0705f; --pending: #d1aa5c; }
+  :root.light { --bg: #e8e6e0; --ink: #1a1a18; --muted: #777672; --line: #ceccc7; --up: #4f7a45; --down: #b0483a; --pending: #9a7426; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 400px; overflow: hidden; }
+  body { background: var(--bg); color: var(--ink); font-family: Plex, sans-serif; position: relative; }
+  .frame { position: absolute; inset: 0 140px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+  .flock { position: absolute; left: 190px; top: 70px; font-family: "Courier New", monospace; font-weight: 700; }
+  .flock span { position: absolute; white-space: nowrap; }
+  .mark { position: absolute; left: 196px; top: 162px; font-family: "Courier New", monospace; font-weight: 700; font-size: 56px; letter-spacing: -0.04em; }
+  .word { position: absolute; left: 400px; top: 118px; font-size: 112px; font-weight: 500; letter-spacing: -0.04em; line-height: 1; }
+  .tag { position: absolute; left: 406px; top: 252px; font-size: 22px; color: var(--muted); letter-spacing: 0.01em; }
+  .bars { position: absolute; left: 406px; top: 300px; display: flex; gap: 4px; }
+  .bars i { width: 14px; height: 14px; border-radius: 2px; background: var(--up); }
+  .bars i.d { background: var(--down); } .bars i.p { background: var(--pending); }
+  .status { position: absolute; right: 190px; top: 118px; display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 500;
+    border: 1px solid var(--up); color: var(--up); padding: 9px 16px; border-radius: 3px; }
+  .status b { width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .status span { color: var(--ink); }
+  .rule { position: absolute; left: 140px; right: 140px; top: 360px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="frame"></div>
+<div class="flock" id="flock"></div>
+<div class="mark">&gt;^&lt;</div>
+<div class="word">anpi</div>
+<div class="tag">lightweight uptime monitoring, written in Rust</div>
+<div class="bars" id="bars"></div>
+<div class="status"><b></b><span>All systems operational</span></div>
+<div class="rule"></div>
+<script>
+  if (new URLSearchParams(location.search).get("theme") === "light") document.documentElement.classList.add("light");
+  var birds = [[0, 0, ">^<", 0.35, 15], [46, -22, ">v<", 0.25, 13], [92, 6, "~^~", 0.3, 14], [30, 34, ">-<", 0.2, 12], [120, -8, ">^<", 0.18, 12]];
+  var flock = document.getElementById("flock");
+  birds.forEach(function (b) {
+    var s = document.createElement("span");
+    s.textContent = b[2]; s.style.left = b[0] + "px"; s.style.top = b[1] + "px"; s.style.opacity = b[3]; s.style.fontSize = b[4] + "px";
+    flock.appendChild(s);
+  });
+  var bars = document.getElementById("bars");
+  for (var i = 0; i < 30; i++) {
+    var e = document.createElement("i");
+    if (i === 11) e.className = "d"; else if (i === 23) e.className = "p";
+    bars.appendChild(e);
+  }
+</script>
+</body>
+</html>

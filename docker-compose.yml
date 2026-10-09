@@ -1,7 +1,8 @@
 services:
   anpi:
-    build: .
-    image: anpi:latest
+    image: ghcr.io/igorovh/anpi:latest
+    # To build from source instead: comment out `image` and uncomment `build`.
+    # build: .
     restart: unless-stopped
     ports:
       - "3000:3000"

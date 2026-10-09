@@ -1,15 +1,26 @@
-<h1 align="center"><code>&gt;^&lt;</code> anpi</h1>
-
 <p align="center">
-  A small, self-hosted uptime monitor written in Rust.<br>
-  One ~9&nbsp;MB binary, a few MB of RAM, an embedded SQLite database, a web panel, a public status page and alerts.
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/brand/banner-light.png">
+    <img alt="anpi — lightweight uptime monitoring, written in Rust" src="docs/brand/banner-dark.png" width="100%">
+  </picture>
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/status-light.png">
-    <img alt="Public status page" src="docs/screenshots/status-dark.png" width="860">
-  </picture>
+  A small, self-hosted uptime monitor: one ~9&nbsp;MB binary, a few MB of RAM, an embedded SQLite database,<br>
+  a web panel, a public status page and alerts.
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#monitors">Monitors</a> ·
+  <a href="#alerts">Alerts</a> ·
+  <a href="#status-page-and-api">Status page</a> ·
+  <a href="#sign-in-and-sso">SSO</a> ·
+  <a href="#configuration">Configuration</a>
+</p>
+
+<p align="center">
+  <img alt="The dashboard and the public status page" src="docs/brand/showcase.png" width="100%">
 </p>
 
 ## Why anpi
@@ -21,26 +32,36 @@
 
 ## Screenshots
 
-| Dashboard | Monitor | New monitor |
+| Dashboard | Monitor page | New monitor |
 |---|---|---|
 | ![Dashboard with groups, sub-monitors and live heartbeat bars](docs/screenshots/dashboard.png) | ![Monitor page with response-time chart split into phases](docs/screenshots/monitor.png) | ![Monitor form with a JSON rule and its plain-language summary](docs/screenshots/monitor-form.png) |
 
-## Quick start
+## Install
 
 ### Docker
 
+Images for `linux/amd64` and `linux/arm64` are published with every release:
+
 ```sh
-docker compose up -d
-docker compose logs anpi | grep "setup code"
+docker run -d --name anpi -p 3000:3000 -v anpi-data:/data ghcr.io/igorovh/anpi:latest
+docker logs anpi 2>&1 | grep "setup code"
 ```
 
-Open `http://localhost:3000/setup` and enter the setup code from the log to create the first account. The code makes sure only someone with server access can claim a fresh instance. Before you deploy, edit `ANPI_BASE_URL` in `docker-compose.yml`; an `https://` URL turns on secure cookies.
+or `docker compose up -d` with the included [`docker-compose.yml`](docker-compose.yml). Open `http://localhost:3000/setup` and enter the setup code from the log to create the first account; the code makes sure only someone with server access can claim a fresh instance. When anpi runs behind HTTPS, set `ANPI_BASE_URL` (e.g. `https://status.example.com`) to turn on secure cookies.
 
 ### Binary
 
+Download an archive for your platform from [Releases](https://github.com/igorovh/anpi/releases): Linux x86_64 and ARM64 (static, any distribution), Windows x86_64 and macOS (Apple silicon). Each archive includes the systemd unit from `deploy/`.
+
 ```sh
-cargo build --release
-./target/release/anpi            # listens on 0.0.0.0:3000, data in ./data
+tar xzf anpi-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+./anpi-v0.1.0-x86_64-unknown-linux-musl/anpi      # listens on 0.0.0.0:3000, data in ./data
+```
+
+### From source
+
+```sh
+cargo build --release          # or: docker build -t anpi .
 ```
 
 ### Try it with example data
@@ -134,7 +155,7 @@ Checks are stored for 24 hours, then rolled up into hourly averages kept for a y
 
 ## Deployment notes
 
-- **systemd:** `deploy/anpi.service` runs anpi as an unprivileged user with a hardened sandbox; `deploy/anpi.env.example` lists the settings.
+- **systemd:** copy the binary to `/usr/local/bin/anpi`; `deploy/anpi.service` runs anpi as an unprivileged user with a hardened sandbox; `deploy/anpi.env.example` lists the settings.
 - **Reverse proxy:** put Caddy or nginx in front for HTTPS and set `ANPI_TRUST_PROXY=true`.
 - **IPv6 in Docker:** IPv6 monitors need IPv6 inside the container. Enable it in the Docker daemon or use `network_mode: host`.
 - **Ping:** ICMP needs `CAP_NET_RAW` (granted in the systemd unit) or unprivileged ICMP sockets through `net.ipv4.ping_group_range`, which Docker allows by default.
@@ -158,7 +179,9 @@ cargo clippy --all-targets
 
 The integration tests start real local servers (HTTP, self-signed HTTPS, a WebSocket echo server, a webhook receiver and a mock OIDC provider). They check that each outage produces exactly one down and one recovery alert, that maintenance and restarts stay quiet, IPv4/IPv6 selection, TLS and certificate handling, retention, CSRF and origin checks, login rate limiting, drag and drop moves and the full SSO flow.
 
-`design/playground.html` is a standalone page for trying layout, font and colour changes against the real stylesheet; open it straight from disk.
+`design/playground.html` is a standalone page for trying layout, font and colour changes against the real stylesheet; open it straight from disk. `docs/brand/*.html` are the sources of the README images, and `anpi demo` produces the data shown in the screenshots.
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow builds the archives, publishes the GitHub release, and assembles the Docker image from the same static binaries using `Dockerfile.release`.
 
 ```
 src/checks      HTTP client with phase timings, WebSocket, TCP, ping, DNS, response rules

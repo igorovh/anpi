@@ -23,6 +23,7 @@ pub enum EventKind {
 pub struct NotifyEvent {
     pub kind: EventKind,
     pub monitor_name: String,
+    pub parent_name: Option<String>,
     pub target: String,
     pub message: String,
     pub at: i64,
@@ -38,8 +39,16 @@ impl NotifyEvent {
         }
     }
 
+    /// "Parent › Child" for sub-monitors.
+    pub fn label(&self) -> String {
+        match &self.parent_name {
+            Some(p) => format!("{p} › {}", self.monitor_name),
+            None => self.monitor_name.clone(),
+        }
+    }
+
     pub fn title(&self) -> String {
-        let n = &self.monitor_name;
+        let n = &self.label();
         match &self.kind {
             EventKind::Down => format!("🔴 {n} is down"),
             EventKind::Up { .. } => format!("🟢 {n} is back up"),
@@ -221,7 +230,7 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
                 "event": ev.code(),
                 "title": ev.title(),
                 "message": ev.message,
-                "monitor": { "name": ev.monitor_name, "target": ev.target },
+                "monitor": { "name": ev.monitor_name, "parent": ev.parent_name, "target": ev.target },
                 "at": ev.at,
             });
             post_json(&cfg.url, payload, &[]).await
@@ -284,12 +293,14 @@ mod tests {
     use super::*;
 
     fn ev(kind: EventKind) -> NotifyEvent {
-        NotifyEvent { kind, monitor_name: "API".into(), target: "https://api.example.com".into(), message: "HTTP 503".into(), at: 0 }
+        NotifyEvent { kind, monitor_name: "API".into(), parent_name: None, target: "https://api.example.com".into(), message: "HTTP 503".into(), at: 0 }
     }
 
     #[test]
     fn titles_and_bodies_describe_the_event() {
         assert_eq!(ev(EventKind::Down).title(), "🔴 API is down");
+        let child = NotifyEvent { parent_name: Some("Shop".into()), ..ev(EventKind::Down) };
+        assert_eq!(child.title(), "🔴 Shop › API is down", "sub-monitors name their parent");
         let up = ev(EventKind::Up { downtime_ms: Some(125_000) });
         assert!(up.title().contains("back up"));
         assert!(up.body().contains("Downtime: 2m 5s"));

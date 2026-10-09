@@ -143,6 +143,7 @@ pub async fn test(State(st): State<AppState>, user: CurrentUser, Path(id): Path<
     let ev = NotifyEvent {
         kind: EventKind::Test,
         monitor_name: "anpi".into(),
+        parent_name: None,
         target: String::new(),
         message: format!("If you can read this, the \"{}\" channel works.", c.name),
         at: now_ms(),

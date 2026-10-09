@@ -212,7 +212,13 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
     let (rows, more_incidents) = store::heartbeats::public_recent_incidents(st.db(), settings.incidents_shown).await?;
     let incidents = rows
         .into_iter()
-        .map(|r| (r.incident, r.monitor_name))
+        .map(|r| {
+            let name = match r.parent {
+                Some((_, parent)) => format!("{parent} › {}", r.monitor_name),
+                None => r.monitor_name,
+            };
+            (r.incident, name)
+        })
         .map(|(i, name)| PublicIncident {
             monitor: name,
             started: format_ts(i.started_at),

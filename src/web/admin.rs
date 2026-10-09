@@ -707,6 +707,7 @@ pub struct ChildRow {
 pub struct IncidentRow {
     pub monitor_id: i64,
     pub monitor: String,
+    pub parent: Option<(i64, String)>,
     pub started: String,
     pub duration: String,
     pub ongoing: bool,
@@ -718,6 +719,7 @@ fn incident_rows(rows: Vec<store::heartbeats::IncidentRow>, now: i64) -> Vec<Inc
         .map(|r| IncidentRow {
             monitor_id: r.incident.monitor_id,
             monitor: r.monitor_name,
+            parent: r.parent,
             started: format_ts(r.incident.started_at),
             duration: format_duration_ms(r.incident.ended_at.unwrap_or(now) - r.incident.started_at),
             ongoing: r.incident.ended_at.is_none(),

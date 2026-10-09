@@ -226,8 +226,13 @@ pub(crate) async fn process(ctx: &Arc<Ctx>, m: &mut Monitor, state: &mut Monitor
 }
 
 fn spawn_notify(ctx: &Arc<Ctx>, m: &Monitor, kind: EventKind, message: String, at: i64) {
-    let ev = NotifyEvent { kind, monitor_name: m.name.clone(), target: m.display_target(), message, at };
+    let mut ev = NotifyEvent { kind, monitor_name: m.name.clone(), parent_name: None, target: m.display_target(), message, at };
     let db = ctx.db.clone();
-    let id = m.id;
-    tokio::spawn(async move { notify::notify_monitor(&db, id, ev).await });
+    let (id, parent) = (m.id, m.parent_id);
+    tokio::spawn(async move {
+        if let Some(p) = parent {
+            ev.parent_name = store::monitors::get(&db, p).await.ok().flatten().map(|p| p.name);
+        }
+        notify::notify_monitor(&db, id, ev).await
+    });
 }

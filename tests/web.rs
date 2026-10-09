@@ -626,3 +626,28 @@ async fn status_page_follows_the_panel_order() {
     let panel = c.get("/admin").await.body;
     assert_eq!(order(&panel, ["data-name=\"a\"", "data-name=\"b\"", "data-name=\"c\""]), ["data-name=\"c\"", "data-name=\"a\"", "data-name=\"b\""]);
 }
+
+#[tokio::test]
+async fn sub_monitor_incidents_name_their_parent() {
+    use anpi::models::MonitorInput;
+    use anpi::store::heartbeats::create_incident;
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let mk = |n: &str, public: bool, parent: Option<i64>| MonitorInput { public, active: false, parent_id: parent, ..MonitorInput::http(n, "https://example.com") };
+    let api = anpi::store::monitors::create(db, &MonitorInput { public_name: "Public API".into(), ..mk("api-internal", true, None) }).await.unwrap();
+    let search = anpi::store::monitors::create(db, &mk("Search", true, Some(api))).await.unwrap();
+    let hidden = anpi::store::monitors::create(db, &mk("secret-cluster", false, None)).await.unwrap();
+    let node = anpi::store::monitors::create(db, &mk("Node", true, Some(hidden))).await.unwrap();
+    let now = anpi::util::now_ms();
+    create_incident(db, search, now - 1000, "HTTP 503").await.unwrap();
+    create_incident(db, node, now, "timeout").await.unwrap();
+
+    let public = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert!(public.contains("Public API › Search"), "public names of both");
+    assert!(public.contains("<strong>Node</strong>") && !public.contains("secret-cluster"), "a private parent is not revealed");
+
+    let panel = c.get("/admin/incidents").await.body;
+    assert!(panel.contains(&format!("<a href=\"/admin/monitors/{api}\">api-internal</a>")), "the panel links the parent");
+    assert!(panel.contains(&format!("<a href=\"/admin/monitors/{hidden}\">secret-cluster</a>")));
+}

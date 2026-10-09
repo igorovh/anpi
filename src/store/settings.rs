@@ -20,6 +20,8 @@ pub struct AppSettings {
     pub raw_retention_hours: i64,
     pub hourly_retention_days: i64,
     pub incident_retention_days: i64,
+    /// Incidents listed on the public status page; 0 hides the section.
+    pub incidents_shown: i64,
 }
 
 impl Default for AppSettings {
@@ -30,6 +32,7 @@ impl Default for AppSettings {
             raw_retention_hours: 24,
             hourly_retention_days: 365,
             incident_retention_days: 365,
+            incidents_shown: 10,
         }
     }
 }
@@ -44,6 +47,7 @@ impl AppSettings {
             raw_retention_hours: num(get(db, "raw_retention_hours").await?, d.raw_retention_hours),
             hourly_retention_days: num(get(db, "hourly_retention_days").await?, d.hourly_retention_days),
             incident_retention_days: num(get(db, "incident_retention_days").await?, d.incident_retention_days),
+            incidents_shown: num(get(db, "incidents_shown").await?, d.incidents_shown),
         })
     }
 
@@ -52,6 +56,7 @@ impl AppSettings {
         set(db, "status_description", &self.status_description).await?;
         set(db, "raw_retention_hours", &self.raw_retention_hours.to_string()).await?;
         set(db, "hourly_retention_days", &self.hourly_retention_days.to_string()).await?;
-        set(db, "incident_retention_days", &self.incident_retention_days.to_string()).await
+        set(db, "incident_retention_days", &self.incident_retention_days.to_string()).await?;
+        set(db, "incidents_shown", &self.incidents_shown.to_string()).await
     }
 }

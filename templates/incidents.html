@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block content %}
+<section class="page-head fade">
+  <div>
+    <h1>Incidents</h1>
+    <p class="muted">{{ pager.total }} {% if ongoing_only %}ongoing {% endif %}incident{% if pager.total != 1 %}s{% endif %} · every outage that crossed a monitor's failure threshold, ongoing ones first.</p>
+  </div>
+  <nav class="tabs">
+    <a href="/admin/incidents"{% if !ongoing_only %} class="on"{% endif %}>All</a>
+    <a href="/admin/incidents?ongoing=1"{% if ongoing_only %} class="on"{% endif %}>Ongoing</a>
+  </nav>
+</section>
+
+<section class="fade">
+  {% if rows.is_empty() %}
+  <p class="muted">{% if ongoing_only %}Nothing is down right now.{% else %}No incidents recorded.{% endif %}</p>
+  {% else %}
+  <ul class="timeline incident-list">
+    {% for i in rows %}
+    <li>
+      <span class="when">{{ i.started }}</span>
+      <span class="what"><a href="/admin/monitors/{{ i.monitor_id }}">{{ i.monitor }}</a>{% if i.ongoing %}<span class="tag s-down">ongoing</span>{% endif %} · {{ i.duration }}<br><span class="muted">{{ i.message }}</span></span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% call ui::pager(pager, "incidents") %}{% endcall %}
+  {% endif %}
+</section>
+{% endblock %}

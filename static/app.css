@@ -381,3 +381,11 @@ p.small { font-size: 0.82rem; margin: -0.3rem 0 0.9rem; }
 .card-link { margin-top: 1rem; font-size: 0.85rem; }
 .rule-summary { font-size: 0.85rem; color: var(--ink); background: var(--panel); border-left: 2px solid var(--faint); padding: 0.45rem 0.8rem; margin: -0.2rem 0 1rem; }
 .rule-summary:empty { display: none; }
+
+/* pagination */
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; font-size: 0.82rem; }
+.btn.disabled { opacity: 0.35; pointer-events: none; }
+h3 .count { margin-left: 0.4rem; font-weight: 400; letter-spacing: 0; color: var(--muted); }
+.incident-list .what a { font-weight: 500; }
+.incident-list .tag { margin-left: 0.5rem; }
+.more-note { margin-top: 0.8rem; }

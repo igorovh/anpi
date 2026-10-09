@@ -31,6 +31,18 @@ For Keycloak:
 
 PKCE is always used. The ID token's issuer, audience, expiry and nonce are checked, and the login state is bound to the browser that started it.
 
+## Backup and moving servers
+
+**Settings → Backup → Export configuration** downloads one JSON file. It contains monitors with their sub-monitors, groups, notification channels, maintenance windows, settings, the logo and SSO settings. Check history and user accounts are left out. The file holds webhook URLs, passwords and secrets, so keep it private.
+
+**Import** accepts that file or an Uptime Kuma backup and detects which one it is.
+- *Add* keeps what is already there and reuses groups and channels with the same name.
+- *Replace* deletes the current monitors with their history, groups, channels and maintenance windows first, after an explicit confirmation.
+- Push tokens are kept, so cron jobs keep working after a move.
+- Imported SSO settings stay off until you enable them.
+
+The same works offline with `anpi export` and `anpi import`.
+
 ## Data and retention
 
 Checks are stored for 24 hours, then rolled up into hourly averages kept for a year; closed incidents are kept for a year. All three periods can be changed under **Settings**. Uptime figures and charts read across raw and hourly data, so pruning never changes them. A few dozen monitors stay well under 100 MB, and the current database size is shown in the settings.
@@ -50,6 +62,8 @@ anpi demo                     # fill an empty database with example data
 anpi healthcheck              # exit 0 if the local server is healthy (used by Docker)
 anpi reset-password <user>    # set a new password from stdin and sign out old sessions
 anpi disable-sso              # turn off SSO configured in the panel
+anpi export [file]            # write the configuration as JSON (stdout by default)
+anpi import <file> [--replace]  # load an anpi export or an Uptime Kuma backup
 ```
 
 ## Security notes

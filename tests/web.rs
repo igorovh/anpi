@@ -436,3 +436,91 @@ async fn spoofed_forwarded_for_does_not_reset_the_login_limit() {
     }
     assert_eq!(attempt("10.9.9.9".into(), "a-long-password").await, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn incidents_are_limited_publicly_and_paginated_in_the_panel() {
+    use anpi::models::MonitorInput;
+    use anpi::store::heartbeats::{close_incident, create_incident};
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let public = anpi::store::monitors::create(db, &MonitorInput { public: true, public_name: "Website".into(), ..MonitorInput::http("web-prod-7", "https://example.com") })
+        .await
+        .unwrap();
+    let private = anpi::store::monitors::create(db, &MonitorInput::http("secret-db", "https://example.com")).await.unwrap();
+    let now = anpi::util::now_ms();
+    // 22 finished incidents plus one ongoing that started before all of them.
+    for i in 0..22 {
+        let id = create_incident(db, public, now - 60_000 * (100 - i), &format!("closed #{i}")).await.unwrap();
+        close_incident(db, id, now - 60_000 * (99 - i)).await.unwrap();
+    }
+    create_incident(db, public, now - 60_000 * 500, "still down").await.unwrap();
+    create_incident(db, private, now, "private outage").await.unwrap();
+
+    let page = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert_eq!(page.matches("<li>").count(), 10, "default of 10 recent incidents");
+    let first = page.find("ongoing").unwrap();
+    assert!(first < page.find("was down for").unwrap(), "ongoing incidents come first");
+    assert!(page.contains("Showing the 10 most recent incidents"));
+    assert!(page.contains("Website") && !page.contains("web-prod-7"), "public names only");
+    assert!(!page.contains("private outage") && !page.contains("secret-db"));
+
+    let detail = c.get(&format!("/admin/monitors/{public}?ip=3")).await.body;
+    assert!(detail.contains("page 3 of 3") && detail.contains("23 incidents"), "10 per page");
+    assert!(detail.contains("?range=24h&#38;ip=2&#38;cp=1#incidents"), "newer link keeps the other lists");
+    assert_eq!(detail.matches("closed #").count(), 3);
+    assert!(c.get(&format!("/admin/monitors/{public}?ip=99")).await.body.contains("page 3 of 3"), "out of range clamps");
+
+    let all = c.get("/admin/incidents").await.body;
+    assert!(all.contains("24 incidents") && all.contains("secret-db"), "the panel sees every monitor");
+    let ongoing = c.get("/admin/incidents?ongoing=1").await.body;
+    assert_eq!(ongoing.matches("ongoing</span>").count(), 2);
+    assert!(!ongoing.contains("closed #"));
+
+    let csrf = c.csrf().await;
+    let r = c.post("/admin/settings", &[("csrf", &csrf), ("status_title", "S"), ("raw_retention_hours", "24"), ("hourly_retention_days", "365"),
+        ("incident_retention_days", "365"), ("incidents_shown", "0")]).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+    let hidden = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
+    assert!(!hidden.contains("Recent incidents") && !hidden.contains("#incidents"), "0 hides the section and its nav link");
+}
+
+#[tokio::test]
+async fn configuration_export_and_import_through_the_panel() {
+    use anpi::models::MonitorInput;
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let old = anpi::store::monitors::create(db, &MonitorInput { public_name: "Site".into(), ..MonitorInput::http("Website", "http://127.0.0.1:9/") })
+        .await
+        .unwrap();
+    app.scheduler.reload(old).await.unwrap();
+
+    let anon = Client::new(anpi::web::router(app.state.clone())).get("/admin/export").await;
+    assert_eq!(anon.status, StatusCode::SEE_OTHER, "export needs a session");
+    let export = c.get("/admin/export").await;
+    assert_eq!(export.status, StatusCode::OK);
+    assert!(export.headers.get("content-disposition").unwrap().to_str().unwrap().starts_with("attachment; filename=\"anpi-config-"));
+    assert!(export.body.contains("\"anpi_export\": 1") && export.body.contains("\"public_name\": \"Site\""));
+
+    let merged = c.post("/admin/import", &[("csrf", &csrf), ("json", &export.body), ("mode", "merge")]).await;
+    assert!(merged.body.contains("Imported 1 monitor"), "{}", merged.body);
+    let all = anpi::store::monitors::list(db).await.unwrap();
+    assert_eq!(all.len(), 2);
+    let duplicate = all.iter().map(|m| m.id).max().unwrap();
+    assert!(app.scheduler.is_running(duplicate).await, "merged monitors start right away");
+
+    let unconfirmed = c.post("/admin/import", &[("csrf", &csrf), ("json", &export.body), ("mode", "replace")]).await;
+    assert_eq!(unconfirmed.status, StatusCode::BAD_REQUEST);
+    assert_eq!(anpi::store::monitors::list(db).await.unwrap().len(), 2, "nothing is deleted without confirmation");
+
+    let replaced = c.post("/admin/import", &[("csrf", &csrf), ("json", &export.body), ("mode", "replace"), ("confirm_replace", "on")]).await;
+    assert!(replaced.body.contains("Imported 1 monitor"), "{}", replaced.body);
+    let now = anpi::store::monitors::list(db).await.unwrap();
+    assert_eq!(now.len(), 1);
+    assert!(!now.iter().any(|m| m.id == duplicate), "the duplicate is gone");
+    assert!(!app.scheduler.is_running(duplicate).await, "checks of replaced monitors stop");
+    assert!(app.scheduler.is_running(now[0].id).await, "imported monitors start");
+    app.scheduler.shutdown().await;
+}

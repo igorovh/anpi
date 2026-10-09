@@ -43,10 +43,11 @@
 </section>
 {% endfor %}
 
+{% if incidents_shown > 0 %}
 <section class="incidents fade" id="incidents">
   <h2 class="group-title">Recent incidents</h2>
   {% if incidents.is_empty() %}
-  <p class="muted">No incidents in the last 14 days.</p>
+  <p class="muted">No incidents recorded.</p>
   {% else %}
   <ul class="timeline">
     {% for i in incidents %}
@@ -56,6 +57,8 @@
     </li>
     {% endfor %}
   </ul>
+  {% if more_incidents %}<p class="muted small more-note">Showing the {{ incidents_shown }} most recent incidents.</p>{% endif %}
   {% endif %}
 </section>
+{% endif %}
 {% endblock %}

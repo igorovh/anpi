@@ -12,6 +12,7 @@ pub struct Layout {
     pub signed_in: bool,
     pub csrf: String,
     pub nav: &'static str,
+    pub show_incidents: bool,
     pub notice: Option<String>,
     pub asset_version: &'static str,
 }
@@ -26,6 +27,7 @@ impl Layout {
             signed_in: false,
             csrf: String::new(),
             nav: "",
+            show_incidents: true,
             notice: None,
             asset_version: asset_version(),
         }
@@ -257,6 +259,33 @@ pub fn check_facts(m: &Monitor) -> Vec<(&'static str, String)> {
     f
 }
 
+/// Page navigation; `link` builds the URL for a page number.
+pub struct Pager {
+    pub page: i64,
+    pub pages: i64,
+    pub total: i64,
+    pub prev: Option<String>,
+    pub next: Option<String>,
+}
+
+impl Pager {
+    pub fn new(total: i64, per_page: i64, requested: i64, link: impl Fn(i64) -> String) -> Self {
+        let pages = ((total + per_page - 1) / per_page.max(1)).max(1);
+        let page = requested.clamp(1, pages);
+        Self {
+            page,
+            pages,
+            total,
+            prev: (page > 1).then(|| link(page - 1)),
+            next: (page < pages).then(|| link(page + 1)),
+        }
+    }
+
+    pub fn is_multi(&self) -> bool {
+        self.pages > 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +380,17 @@ mod tests {
         let facts = check_facts(&Monitor::draft(&input));
         assert!(facts.iter().any(|(k, v)| *k == "Expects" && v == "handshake succeeds"));
         assert!(facts.iter().any(|(k, v)| *k == "Sends" && v == "nothing"));
+    }
+
+    #[test]
+    fn pager_clamps_and_links() {
+        let p = Pager::new(42, 10, 1, |n| format!("?p={n}"));
+        assert_eq!((p.page, p.pages, p.prev.as_deref(), p.next.as_deref()), (1, 5, None, Some("?p=2")));
+        let last = Pager::new(42, 10, 99, |n| format!("?p={n}"));
+        assert_eq!((last.page, last.next.as_deref(), last.prev.as_deref()), (5, None, Some("?p=4")), "out of range clamps to the last page");
+        let empty = Pager::new(0, 10, 0, |n| format!("?p={n}"));
+        assert_eq!((empty.page, empty.pages, empty.is_multi()), (1, 1, false));
+        assert_eq!(Pager::new(10, 10, 1, |n| n.to_string()).pages, 1, "an exact multiple has no empty last page");
     }
 
     #[test]

@@ -11,6 +11,7 @@ use super::{AppError, AppResult, AppState, CurrentUser, render};
 use crate::auth::oidc::Oidc;
 use crate::auth::password;
 use crate::auth::sso::{PanelSso, SsoSource, normalize_base_url};
+use super::backup;
 use crate::kuma::{self, ImportReport};
 use crate::store::{self, settings::AppSettings};
 use crate::util::{format_ts, now_ms, parse_local_datetime};
@@ -206,6 +207,7 @@ pub struct SettingsForm {
     raw_retention_hours: String,
     hourly_retention_days: String,
     incident_retention_days: String,
+    incidents_shown: String,
 }
 
 impl SettingsForm {
@@ -224,6 +226,10 @@ impl SettingsForm {
             raw_retention_hours: num(&self.raw_retention_hours, "Raw history", 1, 24 * 90)?,
             hourly_retention_days: num(&self.hourly_retention_days, "Hourly history", 1, 3650)?,
             incident_retention_days: num(&self.incident_retention_days, "Incident history", 1, 3650)?,
+            incidents_shown: match self.incidents_shown.trim() {
+                "" => AppSettings::default().incidents_shown,
+                v => num(v, "Incidents on the status page", 0, 50)?,
+            },
         })
     }
 }
@@ -328,7 +334,7 @@ struct ImportPage {
 }
 
 pub async fn import_page(user: CurrentUser) -> AppResult<Response> {
-    Ok(render(&ImportPage { layout: Layout::admin("Import from Uptime Kuma", &user, "settings"), report: None, error: None })?.into_response())
+    Ok(render(&ImportPage { layout: Layout::admin("Import", &user, "settings"), report: None, error: None })?.into_response())
 }
 
 #[derive(Deserialize, Default)]
@@ -336,18 +342,57 @@ pub async fn import_page(user: CurrentUser) -> AppResult<Response> {
 pub struct ImportForm {
     csrf: String,
     json: String,
+    mode: String,
+    confirm_replace: Option<String>,
 }
 
+/// Imports an anpi backup or an Uptime Kuma backup, detected from the file itself.
 pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ImportForm>) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let layout = Layout::admin("Import from Uptime Kuma", &user, "settings");
-    match kuma::import(st.db(), &f.json).await {
+    let layout = Layout::admin("Import", &user, "settings");
+    let fail = |layout, e: String| -> AppResult<Response> {
+        Ok((StatusCode::BAD_REQUEST, render(&ImportPage { layout, report: None, error: Some(e) })?).into_response())
+    };
+    let result = if backup::is_backup(&f.json) {
+        let replace = f.mode == "replace";
+        if replace && f.confirm_replace.is_none() {
+            return fail(layout, "Tick the confirmation to replace the current configuration.".into());
+        }
+        if replace {
+            for m in store::monitors::list(st.db()).await? {
+                st.scheduler.stop(m.id).await;
+            }
+        }
+        let r = backup::import(st.db(), &f.json, replace).await;
+        st.ctx.reload_branding().await?;
+        st.ctx.reload_auth().await?;
+        st.ctx.maintenance.reload(st.db(), now_ms()).await?;
+        r
+    } else {
+        kuma::import(st.db(), &f.json).await
+    };
+    match result {
         Ok(report) => {
             st.scheduler.start_all_missing().await?;
             Ok(render(&ImportPage { layout, report: Some(report), error: None })?.into_response())
         }
-        Err(e) => Ok((StatusCode::BAD_REQUEST, render(&ImportPage { layout, report: None, error: Some(e) })?).into_response()),
+        Err(e) => fail(layout, e),
     }
+}
+
+pub async fn export(State(st): State<AppState>, _user: CurrentUser) -> AppResult<Response> {
+    let b = backup::export(st.db()).await?;
+    let json = serde_json::to_string_pretty(&b)?;
+    let date = crate::util::format_ts(now_ms()).get(..10).unwrap_or("backup").to_string();
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
+            (axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"anpi-config-{date}.json\"")),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        json,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize, Default)]

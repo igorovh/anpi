@@ -1,0 +1,9 @@
+{% macro pager(p, noun) %}
+{% if p.is_multi() %}
+<nav class="pager" aria-label="Pages">
+  {% if let Some(prev) = p.prev %}<a class="btn small" href="{{ prev }}">← Newer</a>{% else %}<span class="btn small disabled">← Newer</span>{% endif %}
+  <span class="muted">page {{ p.page }} of {{ p.pages }} · {{ p.total }} {{ noun }}</span>
+  {% if let Some(next) = p.next %}<a class="btn small" href="{{ next }}">Older →</a>{% else %}<span class="btn small disabled">Older →</span>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

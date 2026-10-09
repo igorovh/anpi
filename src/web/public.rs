@@ -99,6 +99,8 @@ struct StatusPage {
     overall_label: &'static str,
     groups: Vec<PublicGroup>,
     incidents: Vec<PublicIncident>,
+    incidents_shown: i64,
+    more_incidents: bool,
 }
 
 /// Groups in their configured order; ungrouped monitors come last under "Other" if any groups exist.
@@ -208,9 +210,10 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
     let monitors = load_public(&st).await?;
     let all_groups = store::groups::list(st.db()).await?;
     let now = now_ms();
-    let incidents = store::heartbeats::public_incidents_since(st.db(), now - 14 * DAY_MS)
-        .await?
+    let (rows, more_incidents) = store::heartbeats::public_recent_incidents(st.db(), settings.incidents_shown).await?;
+    let incidents = rows
         .into_iter()
+        .map(|r| (r.incident, r.monitor_name))
         .map(|(i, name)| PublicIncident {
             monitor: name,
             started: format_ts(i.started_at),
@@ -229,7 +232,17 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
         None => false,
     };
     layout.nav = "status";
-    render(&StatusPage { layout, description: settings.status_description, overall_class, overall_label, groups, incidents })
+    layout.show_incidents = settings.incidents_shown > 0;
+    render(&StatusPage {
+        layout,
+        description: settings.status_description,
+        overall_class,
+        overall_label,
+        groups,
+        incidents,
+        incidents_shown: settings.incidents_shown,
+        more_incidents,
+    })
 }
 
 #[derive(Serialize)]

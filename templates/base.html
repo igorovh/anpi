@@ -20,12 +20,13 @@
       {% if layout.user.is_some() %}
       <a href="/admin"{% if layout.nav == "monitors" %} class="on"{% endif %}>monitors</a>
       <a href="/admin/notifications"{% if layout.nav == "notifications" %} class="on"{% endif %}>notifications</a>
+      <a href="/admin/incidents"{% if layout.nav == "incidents" %} class="on"{% endif %}>incidents</a>
       <a href="/admin/maintenance"{% if layout.nav == "maintenance" %} class="on"{% endif %}>maintenance</a>
       <a href="/admin/settings"{% if layout.nav == "settings" %} class="on"{% endif %}>settings</a>
       <a href="/">status page</a>
       {% else %}
       <a href="/"{% if layout.nav == "status" %} class="on"{% endif %}>status</a>
-      {% if layout.nav == "status" %}<a href="#incidents">incidents</a>{% endif %}
+      {% if layout.nav == "status" && layout.show_incidents %}<a href="#incidents">incidents</a>{% endif %}
       {% if layout.signed_in %}<a href="/admin">dashboard</a>{% else %}<a href="/login"{% if layout.title == "Sign in" %} class="on"{% endif %}>sign in</a>{% endif %}
       {% endif %}
     </nav>

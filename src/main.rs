@@ -10,7 +10,9 @@ const USAGE: &str = "usage:
   anpi healthcheck              exit 0 if the local server answers /healthz
   anpi reset-password <user>    set a new password (read from stdin)
   anpi disable-sso              turn off SSO set in the panel so passwords work again
-  anpi demo                     fill an empty database with example monitors and history";
+  anpi demo                     fill an empty database with example monitors and history
+  anpi export [file]            write the configuration as JSON (stdout by default)
+  anpi import <file> [--replace]  load a configuration export or Uptime Kuma backup";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -35,6 +37,11 @@ async fn main() -> ExitCode {
         },
         Some("disable-sso") => disable_sso(&config).await,
         Some("demo") => demo(&config).await,
+        Some("export") => export(&config, args.get(1)).await,
+        Some("import") => match args.get(1) {
+            Some(file) => import(&config, file, args.iter().any(|a| a == "--replace")).await,
+            None => Err(anyhow::anyhow!(USAGE)),
+        },
         Some(_) => Err(anyhow::anyhow!(USAGE)),
     };
     match result {
@@ -53,6 +60,38 @@ async fn healthcheck(config: &Config) -> anyhow::Result<()> {
     spec.timeout = Duration::from_secs(5);
     let r = anpi::checks::http::send(&spec).await?;
     anyhow::ensure!(r.status == 200, "unhealthy: HTTP {}", r.status);
+    Ok(())
+}
+
+async fn export(config: &Config, file: Option<&String>) -> anyhow::Result<()> {
+    let db = anpi::db::open(&config.database_path).await?;
+    let json = serde_json::to_string_pretty(&anpi::web::backup::export(&db).await?)?;
+    match file {
+        Some(path) => {
+            std::fs::write(path, json)?;
+            eprintln!("configuration written to {path}; it contains secrets, keep it private");
+        }
+        None => println!("{json}"),
+    }
+    Ok(())
+}
+
+async fn import(config: &Config, file: &str, replace: bool) -> anyhow::Result<()> {
+    let json = std::fs::read_to_string(file)?;
+    let db = anpi::db::open(&config.database_path).await?;
+    let report = if anpi::web::backup::is_backup(&json) {
+        anpi::web::backup::import(&db, &json, replace).await
+    } else {
+        anpi::kuma::import(&db, &json).await
+    }
+    .map_err(anyhow::Error::msg)?;
+    eprintln!(
+        "imported {} monitors, {} channels and {} groups; restart anpi to start the new checks",
+        report.monitors_created, report.channels_created, report.groups_created
+    );
+    for line in report.warnings.iter().chain(&report.skipped) {
+        eprintln!("  - {line}");
+    }
     Ok(())
 }
 

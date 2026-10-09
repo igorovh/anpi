@@ -1,5 +1,6 @@
 mod admin;
 mod auth_routes;
+pub mod backup;
 mod branding;
 mod channels;
 mod charts;
@@ -274,6 +275,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/oidc/callback", get(auth_routes::oidc_callback))
         .route("/admin", get(admin::dashboard))
         .route("/admin/events", get(admin::events))
+        .route("/admin/incidents", get(admin::incidents))
         .route("/admin/monitors/new", get(admin::new_monitor))
         .route("/admin/monitors", post(admin::create_monitor))
         .route("/admin/monitors/test", post(admin::test_monitor))
@@ -291,6 +293,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/maintenance/{id}/delete", post(settings::delete_maintenance))
         .route("/admin/settings", get(settings::settings_page).post(settings::save_settings))
         .route("/admin/users", post(settings::create_user))
+        .route("/admin/export", get(settings::export))
         .route("/admin/branding", post(branding::save_site_name))
         .route("/admin/sso", post(settings::save_sso))
         .route("/admin/sso/test", post(settings::test_sso))

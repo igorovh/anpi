@@ -62,6 +62,7 @@
   <h3>Status page</h3>
   <label>Title<input name="status_title" value="{{ s.status_title }}" required maxlength="100"></label>
   <label>Description<span class="hint">optional</span><textarea name="status_description" rows="2" maxlength="1000">{{ s.status_description }}</textarea></label>
+  <label class="narrow">Incidents shown<span class="hint">most recent, 0 hides the section</span><input name="incidents_shown" value="{{ s.incidents_shown }}" inputmode="numeric" size="4"></label>
 
   <h3>Data retention</h3>
   <p class="muted">Raw checks are rolled up into hourly averages, which power the 7 and 30 day charts. Database size: {{ db_size }}.</p>
@@ -146,8 +147,12 @@
 </form>
 {% endif %}
 
-<section class="card fade">
-  <h3>Import</h3>
-  <p class="muted">Moving from Uptime Kuma? <a href="/admin/import">Import its backup JSON</a>.</p>
+<section class="card fade" id="backup">
+  <h3>Backup</h3>
+  <p class="muted">Export saves monitors, sub-monitors, groups, notification channels, maintenance windows, these settings, the logo and SSO settings to one JSON file. Check history and user accounts are not included. The file contains webhook URLs, passwords and secrets, so keep it private.</p>
+  <div class="form-actions">
+    <a class="btn primary" href="/admin/export" download>Export configuration</a>
+    <a class="btn" href="/admin/import">Import…</a>
+  </div>
 </section>
 {% endblock %}

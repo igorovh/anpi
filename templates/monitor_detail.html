@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "macros.html" as ui %}
 {% block body_attrs %} data-events="/admin/events"{% endblock %}
 {% block content %}
 <section class="page-head fade" data-monitor="{{ m.id }}">
@@ -74,14 +75,15 @@
 {% endif %}
 
 <section class="grid2 fade">
-  <div class="card">
-    <h3>Incidents</h3>
+  <div class="card" id="incidents">
+    <h3>Incidents{% if incident_pager.total > 0 %} <span class="count">{{ incident_pager.total }}</span>{% endif %}</h3>
     {% if incidents.is_empty() %}<p class="muted">No incidents recorded.</p>{% else %}
     <ul class="timeline">
       {% for i in incidents %}
       <li><span class="when">{{ i.started }}</span><span class="what">{% if i.ongoing %}<span class="tag s-down">ongoing</span> {% endif %}{{ i.duration }} · <span class="muted">{{ i.message }}</span></span></li>
       {% endfor %}
     </ul>
+    {% call ui::pager(incident_pager, "incidents") %}{% endcall %}
     {% endif %}
   </div>
   <div class="card">
@@ -97,7 +99,7 @@
 </section>
 
 {% if m.kind != "aggregate" %}
-<section class="card fade">
+<section class="card fade" id="checks">
   <h3>Recent checks</h3>
   <div class="table-wrap">
   <table class="checks">
@@ -109,6 +111,7 @@
     </tbody>
   </table>
   </div>
+  {% call ui::pager(check_pager, "checks") %}{% endcall %}
 </section>
 {% endif %}
 {% endblock %}

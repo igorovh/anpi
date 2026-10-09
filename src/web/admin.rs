@@ -19,7 +19,14 @@ use crate::util::{DAY_MS, HOUR_MS, format_duration_ms, format_ms, format_pct, fo
 pub struct NoticeQuery {
     notice: Option<String>,
     range: Option<String>,
+    /// Page of the incident list and of the check list on a monitor page.
+    ip: Option<i64>,
+    cp: Option<i64>,
 }
+
+const DETAIL_INCIDENTS_PER_PAGE: i64 = 10;
+const DETAIL_CHECKS_PER_PAGE: i64 = 50;
+const INCIDENTS_PER_PAGE: i64 = 25;
 
 pub struct MonitorRow {
     pub id: i64,
@@ -629,10 +636,30 @@ pub struct ChildRow {
 }
 
 pub struct IncidentRow {
+    pub monitor_id: i64,
+    pub monitor: String,
     pub started: String,
     pub duration: String,
     pub ongoing: bool,
     pub message: String,
+}
+
+fn incident_rows(rows: Vec<store::heartbeats::IncidentRow>, now: i64) -> Vec<IncidentRow> {
+    rows.into_iter()
+        .map(|r| IncidentRow {
+            monitor_id: r.incident.monitor_id,
+            monitor: r.monitor_name,
+            started: format_ts(r.incident.started_at),
+            duration: format_duration_ms(r.incident.ended_at.unwrap_or(now) - r.incident.started_at),
+            ongoing: r.incident.ended_at.is_none(),
+            message: r.incident.message,
+        })
+        .collect()
+}
+
+/// Query string for the monitor page that keeps the other lists where they were.
+fn detail_link(range: &str, ip: i64, cp: i64, anchor: &str) -> String {
+    format!("?range={range}&ip={ip}&cp={cp}#{anchor}")
 }
 
 #[derive(Template)]
@@ -662,7 +689,9 @@ struct DetailPage {
     facts: Vec<(&'static str, String)>,
     bars: Vec<Bar>,
     incidents: Vec<IncidentRow>,
+    incident_pager: views::Pager,
     checks: Vec<CheckRow>,
+    check_pager: views::Pager,
 }
 
 fn origin(st: &AppState, headers: &HeaderMap) -> String {
@@ -705,19 +734,14 @@ pub async fn monitor_detail(
     let cert_expiry = store::heartbeats::latest_cert_expiry(db, id).await?;
     let channel_ids = store::monitors::channel_ids(db, id).await?;
     let channels = store::notifications::list(db).await?.into_iter().filter(|c| channel_ids.contains(&c.id)).map(|c| c.name).collect();
-    let incidents = store::heartbeats::incidents_for(db, id, 20)
-        .await?
-        .into_iter()
-        .map(|i| IncidentRow {
-            started: format_ts(i.started_at),
-            duration: format_duration_ms(i.ended_at.unwrap_or(now) - i.started_at),
-            ongoing: i.ended_at.is_none(),
-            message: i.message,
-        })
-        .collect();
-    let checks = recent
+    let (ip, cp) = (q.ip.unwrap_or(1).max(1), q.cp.unwrap_or(1).max(1));
+    let (inc_rows, inc_total) = store::heartbeats::incidents_page(db, Some(id), false, ip, DETAIL_INCIDENTS_PER_PAGE).await?;
+    let incident_pager = views::Pager::new(inc_total, DETAIL_INCIDENTS_PER_PAGE, ip, |p| detail_link(range, p, cp, "incidents"));
+    let incidents = incident_rows(inc_rows, now);
+    let (check_rows, check_total) = store::heartbeats::checks_page(db, id, cp, DETAIL_CHECKS_PER_PAGE).await?;
+    let check_pager = views::Pager::new(check_total, DETAIL_CHECKS_PER_PAGE, cp, |p| detail_link(range, ip, p, "checks"));
+    let checks = check_rows
         .iter()
-        .take(50)
         .map(|b| CheckRow {
             time: format_ts(b.ts),
             status_class: views::status_class(b.status()),
@@ -772,10 +796,41 @@ pub async fn monitor_detail(
         facts: views::check_facts(&m),
         bars: views::heartbeat_bars(&oldest_first, 60),
         incidents,
+        incident_pager,
         checks,
+        check_pager,
         m,
     };
     render(&page)
+}
+
+#[derive(Deserialize)]
+pub struct IncidentsQuery {
+    page: Option<i64>,
+    ongoing: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "incidents.html")]
+struct IncidentsPage {
+    layout: Layout,
+    rows: Vec<IncidentRow>,
+    pager: views::Pager,
+    ongoing_only: bool,
+}
+
+pub async fn incidents(State(st): State<AppState>, user: CurrentUser, Query(q): Query<IncidentsQuery>) -> AppResult<Html<String>> {
+    let ongoing_only = q.ongoing.as_deref().is_some_and(|v| v == "1");
+    let page = q.page.unwrap_or(1).max(1);
+    let (rows, total) = store::heartbeats::incidents_page(st.db(), None, ongoing_only, page, INCIDENTS_PER_PAGE).await?;
+    let filter = if ongoing_only { "&ongoing=1" } else { "" };
+    let pager = views::Pager::new(total, INCIDENTS_PER_PAGE, page, |p| format!("?page={p}{filter}"));
+    render(&IncidentsPage {
+        layout: Layout::admin("Incidents", &user, "incidents"),
+        rows: incident_rows(rows, now_ms()),
+        pager,
+        ongoing_only,
+    })
 }
 
 #[cfg(test)]

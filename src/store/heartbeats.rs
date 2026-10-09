@@ -92,9 +92,10 @@ pub struct IncidentRow {
     pub monitor_name: String,
     /// The parent monitor, for sub-monitors; on the public page only if the parent is public too.
     pub parent: Option<(i64, String)>,
+    pub group: Option<String>,
 }
 
-type IncidentJoin = (i64, i64, i64, Option<i64>, String, String, Option<i64>, Option<String>);
+type IncidentJoin = (i64, i64, i64, Option<i64>, String, String, Option<i64>, Option<String>, Option<String>);
 
 /// Offset of a page clamped to the existing pages, matching `views::Pager`.
 fn offset(total: i64, page: i64, per_page: i64) -> i64 {
@@ -104,10 +105,11 @@ fn offset(total: i64, page: i64, per_page: i64) -> i64 {
 
 fn rows(raw: Vec<IncidentJoin>) -> Vec<IncidentRow> {
     raw.into_iter()
-        .map(|(id, monitor_id, started_at, ended_at, message, monitor_name, parent_id, parent_name)| IncidentRow {
+        .map(|(id, monitor_id, started_at, ended_at, message, monitor_name, parent_id, parent_name, group)| IncidentRow {
             incident: Incident { id, monitor_id, started_at, ended_at, message },
             monitor_name,
             parent: parent_id.zip(parent_name),
+            group,
         })
         .collect()
 }
@@ -120,8 +122,9 @@ pub async fn incidents_page(db: &Db, monitor_id: Option<i64>, ongoing_only: bool
         .fetch_one(db)
         .await?;
     let raw: Vec<IncidentJoin> = sqlx::query_as(
-        "SELECT i.id, i.monitor_id, i.started_at, i.ended_at, i.message, m.name, p.id, p.name
+        "SELECT i.id, i.monitor_id, i.started_at, i.ended_at, i.message, m.name, p.id, p.name, g.name
          FROM incidents i JOIN monitors m ON m.id = i.monitor_id LEFT JOIN monitors p ON p.id = m.parent_id
+         LEFT JOIN monitor_groups g ON g.id = m.group_id
          WHERE (?1 IS NULL OR i.monitor_id = ?1) AND (?2 = 0 OR i.ended_at IS NULL)
          ORDER BY (i.ended_at IS NULL) DESC, i.started_at DESC, i.id DESC LIMIT ?3 OFFSET ?4",
     )
@@ -139,9 +142,10 @@ pub async fn public_recent_incidents(db: &Db, limit: i64) -> sqlx::Result<(Vec<I
     let raw: Vec<IncidentJoin> = sqlx::query_as(
         "SELECT i.id, i.monitor_id, i.started_at, i.ended_at, i.message,
                 CASE WHEN TRIM(m.public_name) <> '' THEN TRIM(m.public_name) ELSE m.name END,
-                p.id, CASE WHEN TRIM(p.public_name) <> '' THEN TRIM(p.public_name) ELSE p.name END
+                p.id, CASE WHEN TRIM(p.public_name) <> '' THEN TRIM(p.public_name) ELSE p.name END, g.name
          FROM incidents i JOIN monitors m ON m.id = i.monitor_id
          LEFT JOIN monitors p ON p.id = m.parent_id AND p.public = 1
+         LEFT JOIN monitor_groups g ON g.id = m.group_id
          WHERE m.public = 1
          ORDER BY (i.ended_at IS NULL) DESC, i.started_at DESC, i.id DESC LIMIT ?",
     )

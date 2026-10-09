@@ -635,8 +635,9 @@ async fn sub_monitor_incidents_name_their_parent() {
     let db = &app.ctx.db;
     let mut c = signed_in(&app).await;
     let mk = |n: &str, public: bool, parent: Option<i64>| MonitorInput { public, active: false, parent_id: parent, ..MonitorInput::http(n, "https://example.com") };
-    let api = anpi::store::monitors::create(db, &MonitorInput { public_name: "Public API".into(), ..mk("api-internal", true, None) }).await.unwrap();
-    let search = anpi::store::monitors::create(db, &mk("Search", true, Some(api))).await.unwrap();
+    let group = anpi::store::groups::create(db, "Product", 0).await.unwrap();
+    let api = anpi::store::monitors::create(db, &MonitorInput { public_name: "Public API".into(), group_id: Some(group), ..mk("api-internal", true, None) }).await.unwrap();
+    let search = anpi::store::monitors::create(db, &MonitorInput { group_id: Some(group), ..mk("Search", true, Some(api)) }).await.unwrap();
     let hidden = anpi::store::monitors::create(db, &mk("secret-cluster", false, None)).await.unwrap();
     let node = anpi::store::monitors::create(db, &mk("Node", true, Some(hidden))).await.unwrap();
     let now = anpi::util::now_ms();
@@ -644,10 +645,11 @@ async fn sub_monitor_incidents_name_their_parent() {
     create_incident(db, node, now, "timeout").await.unwrap();
 
     let public = Client::new(anpi::web::router(app.state.clone())).get("/").await.body;
-    assert!(public.contains("Public API › Search"), "public names of both");
+    assert!(public.contains("<span class=\"tag group-tag\">Product</span><strong>Public API › Search</strong>"), "group tag, then public names of both");
+    assert_eq!(public.matches("group-tag").count(), 1, "monitors without a group get no tag");
     assert!(public.contains("<strong>Node</strong>") && !public.contains("secret-cluster"), "a private parent is not revealed");
 
     let panel = c.get("/admin/incidents").await.body;
-    assert!(panel.contains(&format!("<a href=\"/admin/monitors/{api}\">api-internal</a>")), "the panel links the parent");
+    assert!(panel.contains(&format!("<span class=\"tag group-tag\">Product</span><a href=\"/admin/monitors/{api}\">api-internal</a>")), "the panel tags the group and links the parent");
     assert!(panel.contains(&format!("<a href=\"/admin/monitors/{hidden}\">secret-cluster</a>")));
 }

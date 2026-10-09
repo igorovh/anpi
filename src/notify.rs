@@ -24,6 +24,7 @@ pub struct NotifyEvent {
     pub kind: EventKind,
     pub monitor_name: String,
     pub parent_name: Option<String>,
+    pub group_name: Option<String>,
     pub target: String,
     pub message: String,
     pub at: i64,
@@ -39,12 +40,13 @@ impl NotifyEvent {
         }
     }
 
-    /// "Parent › Child" for sub-monitors.
+    /// "Group › Parent › Monitor", leaving out the parts a monitor does not have.
     pub fn label(&self) -> String {
-        match &self.parent_name {
-            Some(p) => format!("{p} › {}", self.monitor_name),
-            None => self.monitor_name.clone(),
-        }
+        [self.group_name.as_deref(), self.parent_name.as_deref(), Some(self.monitor_name.as_str())]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" › ")
     }
 
     pub fn title(&self) -> String {
@@ -230,7 +232,7 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
                 "event": ev.code(),
                 "title": ev.title(),
                 "message": ev.message,
-                "monitor": { "name": ev.monitor_name, "parent": ev.parent_name, "target": ev.target },
+                "monitor": { "name": ev.monitor_name, "parent": ev.parent_name, "group": ev.group_name, "target": ev.target },
                 "at": ev.at,
             });
             post_json(&cfg.url, payload, &[]).await
@@ -293,7 +295,7 @@ mod tests {
     use super::*;
 
     fn ev(kind: EventKind) -> NotifyEvent {
-        NotifyEvent { kind, monitor_name: "API".into(), parent_name: None, target: "https://api.example.com".into(), message: "HTTP 503".into(), at: 0 }
+        NotifyEvent { kind, monitor_name: "API".into(), parent_name: None, group_name: None, target: "https://api.example.com".into(), message: "HTTP 503".into(), at: 0 }
     }
 
     #[test]
@@ -301,6 +303,8 @@ mod tests {
         assert_eq!(ev(EventKind::Down).title(), "🔴 API is down");
         let child = NotifyEvent { parent_name: Some("Shop".into()), ..ev(EventKind::Down) };
         assert_eq!(child.title(), "🔴 Shop › API is down", "sub-monitors name their parent");
+        let grouped = NotifyEvent { group_name: Some("Product".into()), ..child };
+        assert_eq!(grouped.title(), "🔴 Product › Shop › API is down", "the group comes first");
         let up = ev(EventKind::Up { downtime_ms: Some(125_000) });
         assert!(up.title().contains("back up"));
         assert!(up.body().contains("Downtime: 2m 5s"));

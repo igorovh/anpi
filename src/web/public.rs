@@ -79,6 +79,7 @@ impl PublicMonitor {
 }
 
 pub struct PublicIncident {
+    pub group: Option<String>,
     pub monitor: String,
     pub started: String,
     pub duration: String,
@@ -217,9 +218,10 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
                 Some((_, parent)) => format!("{parent} › {}", r.monitor_name),
                 None => r.monitor_name,
             };
-            (r.incident, name)
+            (r.incident, name, r.group)
         })
-        .map(|(i, name)| PublicIncident {
+        .map(|(i, name, group)| PublicIncident {
+            group,
             monitor: name,
             started: format_ts(i.started_at),
             duration: format_duration_ms(i.ended_at.unwrap_or(now) - i.started_at),

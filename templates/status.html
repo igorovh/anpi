@@ -53,7 +53,7 @@
     {% for i in incidents %}
     <li>
       <span class="when">{{ i.started }}</span>
-      <span class="what"><strong>{{ i.monitor }}</strong> {% if i.ongoing %}has been down for {{ i.duration }}<span class="tag s-down">ongoing</span>{% else %}was down for {{ i.duration }}{% endif %}</span>
+      <span class="what">{% if let Some(g) = i.group %}<span class="tag group-tag">{{ g }}</span>{% endif %}<strong>{{ i.monitor }}</strong> {% if i.ongoing %}has been down for {{ i.duration }}<span class="tag s-down">ongoing</span>{% else %}was down for {{ i.duration }}{% endif %}</span>
     </li>
     {% endfor %}
   </ul>

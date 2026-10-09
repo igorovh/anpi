@@ -411,3 +411,5 @@ h3 .count { margin-left: 0.4rem; font-weight: 400; letter-spacing: 0; color: var
 .form label.choice.confirm { margin: -0.2rem 0 1rem 1.6rem; font-size: 0.85rem; }
 .form .choices .small { margin-top: 0.4rem; }
 .empty .empty-actions { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.6rem 0.8rem; }
+
+.tag.group-tag { margin-right: 0.5rem; }

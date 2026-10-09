@@ -653,3 +653,29 @@ async fn sub_monitor_incidents_name_their_parent() {
     assert!(panel.contains(&format!("<span class=\"tag group-tag\">Product</span><a href=\"/admin/monitors/{api}\">api-internal</a>")), "the panel tags the group and links the parent");
     assert!(panel.contains(&format!("<a href=\"/admin/monitors/{hidden}\">secret-cluster</a>")));
 }
+
+#[tokio::test]
+async fn client_ip_header_decides_who_is_rate_limited() {
+    let app = app(config(&[("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP")])).await;
+    signed_in(&app).await;
+    let router = anpi::web::router(app.state.clone());
+    let attempt = |ip: &'static str, password: &'static str| {
+        let router = router.clone();
+        async move {
+            let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs([("username", "admin"), ("password", password)]).finish();
+            let req = axum::http::Request::post("/login")
+                .header("host", "localhost")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cf-connecting-ip", ip)
+                .header("x-forwarded-for", "192.0.2.99")
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            tower::ServiceExt::oneshot(router, req).await.unwrap().status()
+        }
+    };
+    for _ in 0..10 {
+        attempt("2001:db8::1", "wrong-password").await;
+    }
+    assert_eq!(attempt("2001:db8::1", "a-long-password").await, StatusCode::TOO_MANY_REQUESTS, "the visitor in the header is locked out");
+    assert_eq!(attempt("2001:db8::2", "a-long-password").await, StatusCode::SEE_OTHER, "other visitors behind the same proxy are not");
+}

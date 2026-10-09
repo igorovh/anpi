@@ -19,6 +19,10 @@ pub struct Config {
     pub database_path: PathBuf,
     pub base_url: Option<String>,
     pub trust_proxy: bool,
+    /// Header holding the visitor's address, set by a proxy such as Cloudflare (`CF-Connecting-IP`).
+    pub client_ip_header: Option<http::HeaderName>,
+    /// Certificate and key files; anpi serves HTTPS itself when both are set.
+    pub tls: Option<(PathBuf, PathBuf)>,
     pub max_concurrent_checks: usize,
     pub oidc: Option<OidcConfig>,
 }
@@ -47,6 +51,14 @@ impl Config {
         }
 
         let trust_proxy = get("ANPI_TRUST_PROXY").is_some_and(|v| parse_bool(&v));
+        let client_ip_header = get("ANPI_CLIENT_IP_HEADER")
+            .map(|h| http::HeaderName::try_from(h.as_str()).with_context(|| format!("ANPI_CLIENT_IP_HEADER {h:?} is not a valid header name")))
+            .transpose()?;
+        let tls = match (get("ANPI_TLS_CERT"), get("ANPI_TLS_KEY")) {
+            (Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
+            (None, None) => None,
+            _ => bail!("set both ANPI_TLS_CERT and ANPI_TLS_KEY to serve HTTPS"),
+        };
         let max_concurrent_checks = match get("ANPI_MAX_CONCURRENT_CHECKS") {
             Some(v) => v.parse().context("ANPI_MAX_CONCURRENT_CHECKS must be a number")?,
             None => 64,
@@ -71,7 +83,7 @@ impl Config {
             }
         };
 
-        Ok(Self { bind, database_path, base_url, trust_proxy, max_concurrent_checks, oidc })
+        Ok(Self { bind, database_path, base_url, trust_proxy, client_ip_header, tls, max_concurrent_checks, oidc })
     }
 
     pub fn secure_cookies(&self) -> bool {
@@ -134,6 +146,15 @@ mod tests {
         assert!(c.secure_cookies());
         assert_eq!(c.oidc.as_ref().unwrap().issuer, "https://kc/realms/x");
         assert_eq!(c.oidc_redirect_url().unwrap(), "https://status.example.com/auth/oidc/callback");
+    }
+
+    #[test]
+    fn tls_needs_both_files_and_header_names_are_checked() {
+        let c = Config::from_map(&env(&[("ANPI_TLS_CERT", "/c.pem"), ("ANPI_TLS_KEY", "/k.pem"), ("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP")])).unwrap();
+        assert_eq!(c.tls, Some((PathBuf::from("/c.pem"), PathBuf::from("/k.pem"))));
+        assert_eq!(c.client_ip_header.unwrap().as_str(), "cf-connecting-ip");
+        assert!(Config::from_map(&env(&[("ANPI_TLS_CERT", "/c.pem")])).unwrap_err().to_string().contains("both"));
+        assert!(Config::from_map(&env(&[("ANPI_CLIENT_IP_HEADER", "bad header")])).is_err());
     }
 
     #[test]

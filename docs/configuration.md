@@ -10,6 +10,8 @@
 | `ANPI_DATA_DIR` | `./data` | Directory for `anpi.db` (`ANPI_DATABASE` sets the file path directly) |
 | `ANPI_BASE_URL` | – | Public URL, e.g. `https://status.example.com`. Used for links and SSO; `https` turns on secure cookies |
 | `ANPI_TRUST_PROXY` | `false` | Behind a reverse proxy, take the client address for login rate limiting from the **last** `X-Forwarded-For` entry. Enable it only when a proxy always appends that entry (nginx `$proxy_add_x_forwarded_for`, Caddy and Traefik do); without a proxy, clients could set it themselves |
+| `ANPI_CLIENT_IP_HEADER` | – | Take the client address from this header instead, e.g. `CF-Connecting-IP` behind Cloudflare. Only safe when the firewall lets nothing but the proxy reach anpi |
+| `ANPI_TLS_CERT`, `ANPI_TLS_KEY` | – | PEM certificate and key; anpi then serves HTTPS itself, without a reverse proxy |
 | `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on checks running at once |
 | `ANPI_LOG` | `info` | Log filter, e.g. `debug` or `anpi=debug` |
 | `ANPI_OIDC_ISSUER`, `ANPI_OIDC_CLIENT_ID`, `ANPI_OIDC_CLIENT_SECRET` | – | SSO from the environment; overrides the panel |
@@ -46,6 +48,72 @@ The same works offline with `anpi export` and `anpi import`.
 ## Data and retention
 
 Checks are stored for 24 hours, then rolled up into hourly averages kept for a year; closed incidents are kept for a year. All three periods can be changed under **Settings**. Uptime figures and charts read across raw and hourly data, so pruning never changes them. A few dozen monitors stay well under 100 MB, and the current database size is shown in the settings.
+
+## IPv6-only server behind Cloudflare
+
+anpi can run on a small IPv6-only VPS with Cloudflare in front, without a reverse proxy or tunnel.
+
+**1. Reach IPv4-only services.** GitHub, Discord and many monitored sites have no IPv6 address. Use a DNS64/NAT64 service, for example the free one at [nat64.net](https://nat64.net), or one from your provider. With systemd-resolved:
+
+```sh
+sudo mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNS=2a00:1098:2b::1 2a01:4f8:c2c:123f::1 2a00:1098:2c::1\nDomains=~.\n' | sudo tee /etc/systemd/resolved.conf.d/nat64.conf
+sudo systemctl restart systemd-resolved
+curl -sI https://github.com | head -1   # should print HTTP/2 200
+```
+
+Monitors of IPv4-only sites and Discord alerts go through that gateway, so they depend on it staying up.
+
+**2. Install anpi** with the systemd unit from the release archive:
+
+```sh
+V=v0.2.1
+case $(dpkg --print-architecture) in amd64) T=x86_64-unknown-linux-musl;; arm64) T=aarch64-unknown-linux-musl;; esac
+cd /tmp
+curl -fLO https://github.com/igorovh/anpi/releases/download/$V/anpi-$V-$T.tar.gz
+curl -fLO https://github.com/igorovh/anpi/releases/download/$V/anpi-$V-$T.tar.gz.sha256
+sha256sum -c anpi-$V-$T.tar.gz.sha256 && tar xzf anpi-$V-$T.tar.gz
+sudo install -m 755 anpi-$V-$T/anpi /usr/local/bin/anpi
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin anpi
+sudo install -d -m 755 /etc/anpi
+sudo install -m 600 -o anpi anpi-$V-$T/deploy/anpi.env.example /etc/anpi/anpi.env
+sudo cp anpi-$V-$T/deploy/anpi.service /etc/systemd/system/ && sudo systemctl daemon-reload
+```
+
+**3. Cloudflare.** Add a proxied `AAAA` record for the status page, set **SSL/TLS** to **Full (strict)** and create an **Origin Server** certificate. Save it as `/etc/anpi/origin.pem` and the key as `/etc/anpi/origin.key`, readable by the `anpi` user only:
+
+```sh
+sudo chown anpi:anpi /etc/anpi/origin.*; sudo chmod 600 /etc/anpi/origin.key
+```
+
+**4. Configure** `/etc/anpi/anpi.env`:
+
+```sh
+ANPI_BIND=[::]:443
+ANPI_BASE_URL=https://status.example.com
+ANPI_TLS_CERT=/etc/anpi/origin.pem
+ANPI_TLS_KEY=/etc/anpi/origin.key
+ANPI_CLIENT_IP_HEADER=CF-Connecting-IP
+```
+
+The unit allows binding port 443. Start anpi with `sudo systemctl enable --now anpi`, read the setup code with `sudo journalctl -u anpi | grep "setup code"` and open `https://status.example.com/setup`.
+
+**5. Firewall.** Let only Cloudflare reach port 443; otherwise anyone could bypass it and fake `CF-Connecting-IP`. With nftables (check the ranges at [cloudflare.com/ips-v6](https://www.cloudflare.com/ips-v6) and keep console access in case SSH gets locked out):
+
+```
+table inet filter {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    ct state established,related accept
+    iif lo accept
+    meta l4proto ipv6-icmp accept
+    tcp dport 22 accept
+    tcp dport 443 ip6 saddr { 2400:cb00::/32, 2606:4700::/32, 2803:f800::/32, 2405:b500::/32, 2405:8100::/32, 2a06:98c0::/29, 2c0f:f248::/32 } accept
+  }
+}
+```
+
+Save it as `/etc/nftables.conf` and run `sudo systemctl enable --now nftables`.
 
 ## Deployment notes
 

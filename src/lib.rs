@@ -9,6 +9,7 @@ pub mod monitor;
 pub mod notify;
 pub mod retention;
 pub mod stats;
+pub mod tls;
 pub mod update;
 pub mod store;
 pub mod util;
@@ -55,11 +56,23 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     app.scheduler.start_all_missing().await?;
     retention::spawn(app.ctx.clone());
 
+    let tls = match &app.ctx.config.tls {
+        Some((cert, key)) => Some(tls::load(cert, key)?),
+        None => None,
+    };
     let listener = tokio::net::TcpListener::bind(bind).await.with_context(|| format!("binding {bind}"))?;
-    tracing::info!("anpi listening on http://{bind}");
-    axum::serve(listener, web::router(app.state.clone()).into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let service = web::router(app.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    match tls {
+        Some(acceptor) => {
+            tracing::info!("anpi listening on https://{bind}");
+            let listener = axum::serve::ListenerExt::tap_io(tls::TlsListener::new(listener, acceptor)?, |_| {});
+            axum::serve(listener, service).with_graceful_shutdown(shutdown_signal()).await?;
+        }
+        None => {
+            tracing::info!("anpi listening on http://{bind}");
+            axum::serve(listener, service).with_graceful_shutdown(shutdown_signal()).await?;
+        }
+    }
     app.scheduler.shutdown().await;
     tracing::info!("stopped");
     Ok(())

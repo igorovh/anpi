@@ -180,6 +180,10 @@ impl FromRequestParts<AppState> for ClientIp {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        if let Some(name) = &state.ctx.config.client_ip_header {
+            let ip = parts.headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok());
+            return Ok(Self(ip.unwrap_or(peer)));
+        }
         let forwarded = parts.headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(",");
         Ok(Self(client_ip(peer, state.ctx.config.trust_proxy.then_some(forwarded.as_str()))))
     }

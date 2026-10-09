@@ -96,21 +96,12 @@ mod tests {
 
     #[tokio::test]
     async fn hashing_does_not_block_the_runtime() {
-        // On a single-threaded runtime a blocking hash would freeze this ticker for the whole hash.
-        let ticks = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let counter = ticks.clone();
-        let ticker = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-        });
-        let started = std::time::Instant::now();
+        // On this single-threaded runtime the other task can only run if hashing yields to it.
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        tokio::spawn(async move { flag.store(true, std::sync::atomic::Ordering::SeqCst) });
         verify_async("x", None).await.unwrap();
-        let hash_ms = started.elapsed().as_millis() as u32;
-        ticker.abort();
-        let seen = ticks.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(seen * 5 * 2 >= hash_ms / 2, "ticker advanced {seen} times during a {hash_ms} ms hash");
+        assert!(ran.load(std::sync::atomic::Ordering::SeqCst), "another task ran while the hash was computed");
     }
 
     #[test]

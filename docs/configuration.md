@@ -9,7 +9,7 @@
 | `ANPI_BIND` | `0.0.0.0:3000` | Listen address |
 | `ANPI_DATA_DIR` | `./data` | Directory for `anpi.db` (`ANPI_DATABASE` sets the file path directly) |
 | `ANPI_BASE_URL` | – | Public URL, e.g. `https://status.example.com`. Used for links and SSO; `https` turns on secure cookies |
-| `ANPI_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for login rate limiting behind a reverse proxy |
+| `ANPI_TRUST_PROXY` | `false` | Behind a reverse proxy, take the client address for login rate limiting from the **last** `X-Forwarded-For` entry. Enable it only when a proxy always appends that entry (nginx `$proxy_add_x_forwarded_for`, Caddy and Traefik do); without a proxy, clients could set it themselves |
 | `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on checks running at once |
 | `ANPI_LOG` | `info` | Log filter, e.g. `debug` or `anpi=debug` |
 | `ANPI_OIDC_ISSUER`, `ANPI_OIDC_CLIENT_ID`, `ANPI_OIDC_CLIENT_SECRET` | – | SSO from the environment; overrides the panel |
@@ -51,3 +51,10 @@ anpi healthcheck              # exit 0 if the local server is healthy (used by D
 anpi reset-password <user>    # set a new password from stdin and sign out old sessions
 anpi disable-sso              # turn off SSO configured in the panel
 ```
+
+## Security notes
+
+- **Everyone who can sign in is an admin.** Admins can make anpi send requests to any address, including the local network (monitors, *Run check now*, webhooks and SSO tests), and monitored services can redirect HTTP checks elsewhere. That is what a monitor needs to do, so only give accounts to people you trust with that.
+- **SSO without a required role** lets every account the identity provider signs in become an admin. The settings page warns about this; set a role or group unless the realm is yours alone.
+- **Sign-in is rate limited** per client address (10 failures per 15 minutes) and password hashing runs off the request threads with a small concurrency limit, so floods of sign-in attempts cannot stall the checks.
+- **Alerts quote monitored responses** in some messages (for example a JSON value that did not match). Discord messages are escaped and send no mentions.

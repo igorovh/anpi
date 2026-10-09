@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use super::views::Layout;
 use super::{AppError, AppResult, AppState, ClientIp, CurrentUser, SESSION_COOKIE, render, safe_next};
+use crate::auth::oidc::BeginError;
 use crate::auth::password;
 use crate::store;
 
@@ -70,11 +71,11 @@ pub async fn login(State(st): State<AppState>, ClientIp(ip): ClientIp, jar: Cook
         return login_page_response(&st, StatusCode::TOO_MANY_REQUESTS, &next, &f.username, Some(msg));
     }
     let user = store::users::by_username(st.db(), f.username.trim()).await?;
-    let valid = match &user {
-        Some(u) => u.password_hash.as_deref().is_some_and(|h| password::verify(&f.password, h)),
-        None => {
-            password::dummy_verify(&f.password);
-            false
+    let valid = match password::verify_async(&f.password, user.as_ref().and_then(|u| u.password_hash.as_deref())).await {
+        Ok(v) => v,
+        Err(password::Busy) => {
+            let msg = "The server is busy with other sign-ins. Try again in a moment.".to_string();
+            return login_page_response(&st, StatusCode::SERVICE_UNAVAILABLE, &next, &f.username, Some(msg));
         }
     };
     match user.filter(|_| valid) {
@@ -133,7 +134,7 @@ pub async fn setup(State(st): State<AppState>, jar: CookieJar, Form(f): Form<Set
     if let Err(e) = password::check_strength(&f.password) {
         return fail(&e);
     }
-    let id = store::users::create_local(st.db(), username, &password::hash(&f.password)?).await?;
+    let id = store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?).await?;
     *st.setup_code.lock().expect("setup lock") = None;
     let token = store::users::create_session(st.db(), id, None).await?;
     tracing::info!(user = %username, "initial account created");
@@ -160,9 +161,12 @@ pub async fn logout(State(st): State<AppState>, user: CurrentUser, jar: CookieJa
 
 pub async fn oidc_login(State(st): State<AppState>, jar: CookieJar, Query(q): Query<NextQuery>) -> AppResult<Response> {
     let oidc = st.oidc().ok_or_else(AppError::not_found)?;
-    let (url, state) = oidc.begin(&safe_next(q.next.as_deref())).await.map_err(|e| {
-        tracing::error!(error = %e, "OIDC discovery failed");
-        AppError(StatusCode::BAD_GATEWAY, "The identity provider is unreachable.".into())
+    let (url, state) = oidc.begin(&safe_next(q.next.as_deref())).await.map_err(|e| match e {
+        BeginError::Busy => AppError(StatusCode::SERVICE_UNAVAILABLE, "Too many sign-ins in progress. Try again shortly.".into()),
+        BeginError::Provider(e) => {
+            tracing::error!(error = %e, "OIDC discovery failed");
+            AppError(StatusCode::BAD_GATEWAY, "The identity provider is unreachable.".into())
+        }
     })?;
     let cookie = Cookie::build((OIDC_STATE_COOKIE, state))
         .path("/auth/oidc")

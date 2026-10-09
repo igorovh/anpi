@@ -178,26 +178,35 @@ impl FromRequestParts<AppState> for ClientIp {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        if state.ctx.config.trust_proxy
-            && let Some(ip) = parts
-                .headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.split(',').next())
-                .and_then(|v| v.trim().parse().ok())
-        {
-            return Ok(Self(ip));
-        }
-        let ip = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-        Ok(Self(ip))
+        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let forwarded = parts.headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(",");
+        Ok(Self(client_ip(peer, state.ctx.config.trust_proxy.then_some(forwarded.as_str()))))
     }
 }
 
-/// Only allows relative paths, so `next` cannot redirect to another site.
+/// The trusted proxy appends the real client address last; earlier entries come from the client and are ignored.
+pub fn client_ip(peer: IpAddr, forwarded_for: Option<&str>) -> IpAddr {
+    forwarded_for
+        .and_then(|v| v.rsplit(',').map(str::trim).find(|s| !s.is_empty()))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(peer)
+}
+
+/// Returns a same-site path for `next`. Browsers drop tabs and newlines and treat `\\` as `/`,
+/// so the value is resolved the way a browser would before its host is compared.
 pub fn safe_next(next: Option<&str>) -> String {
-    match next {
-        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.starts_with("/\\") => n.to_string(),
-        _ => "/admin".to_string(),
+    const FALLBACK: &str = "/admin";
+    let Some(n) = next else { return FALLBACK.into() };
+    if !n.starts_with('/') || n.chars().any(|c| c.is_control() || c == '\\') {
+        return FALLBACK.into();
+    }
+    let base = url::Url::parse("http://anpi.invalid/").expect("static base URL");
+    match base.join(n) {
+        Ok(u) if u.origin() == base.origin() => match u.query() {
+            Some(q) => format!("{}?{q}", u.path()),
+            None => u.path().to_string(),
+        },
+        _ => FALLBACK.into(),
     }
 }
 
@@ -317,9 +326,21 @@ mod tests {
     #[test]
     fn next_parameter_cannot_leave_the_site() {
         assert_eq!(safe_next(Some("/admin/monitors/3")), "/admin/monitors/3");
-        assert_eq!(safe_next(Some("//evil.com")), "/admin");
-        assert_eq!(safe_next(Some("/\\evil.com")), "/admin");
-        assert_eq!(safe_next(Some("https://evil.com")), "/admin");
+        assert_eq!(safe_next(Some("/admin/monitors/3?range=7d")), "/admin/monitors/3?range=7d");
+        for evil in ["//evil.com", "/\\evil.com", "https://evil.com", "/\t/evil.com", "/\t\\evil.com", "/\n/evil.com", "/\r\n//evil.com", "evil.com", ""] {
+            assert_eq!(safe_next(Some(evil)), "/admin", "{evil:?} must not leave the site");
+        }
+        assert_eq!(safe_next(Some("/%09/evil.com")), "/%09/evil.com", "percent-encoded tabs stay a path on this site");
         assert_eq!(safe_next(None), "/admin");
+    }
+
+    #[test]
+    fn client_ip_uses_the_address_added_by_the_proxy() {
+        let peer: IpAddr = "10.0.0.2".parse().unwrap();
+        assert_eq!(client_ip(peer, None), peer, "headers are ignored unless the proxy is trusted");
+        assert_eq!(client_ip(peer, Some("1.2.3.4, 198.51.100.7")), "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(peer, Some("198.51.100.7")), "198.51.100.7".parse::<IpAddr>().unwrap());
+        assert_eq!(client_ip(peer, Some("1.2.3.4, garbage")), peer, "an unparsable proxy entry falls back to the peer");
+        assert_eq!(client_ip(peer, Some("")), peer);
     }
 }

@@ -157,6 +157,18 @@ async fn post_json(url: &str, body: serde_json::Value, extra: &[(&str, String)])
     }
 }
 
+/// Error messages can quote monitored responses, so Discord must not render them as markdown links or formatting.
+fn discord_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars().take(1500) {
+        if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '[' | ']' | '(' | ')' | '#' | '-' | '@' | '<') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -170,11 +182,12 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
             let payload = json!({
                 "username": if cfg.username.is_empty() { "anpi" } else { cfg.username.as_str() },
                 "embeds": [{
-                    "title": ev.title(),
-                    "description": ev.body(),
+                    "title": discord_escape(&ev.title()),
+                    "description": discord_escape(&ev.body()),
                     "color": ev.color(),
                     "timestamp": ts,
-                }]
+                }],
+                "allowed_mentions": { "parse": [] },
             });
             post_json(&cfg.webhook_url, payload, &[]).await
         }
@@ -308,6 +321,14 @@ mod tests {
         let c = ChannelConfig { topic: "alerts".into(), server: "https://ntfy.example".into(), ..Default::default() };
         assert_eq!(ChannelConfig::from_json(&c.to_json()), c);
         assert_eq!(ChannelConfig::from_json("not json"), ChannelConfig::default());
+    }
+
+    #[test]
+    fn discord_text_cannot_inject_links_or_mentions() {
+        let e = discord_escape("JSONPath $.x = \"[click](https://evil.example)\" @everyone");
+        assert!(!e.contains("[click](") && e.contains("\\[click\\]\\("), "{e}");
+        assert!(e.contains("\\@everyone"));
+        assert_eq!(discord_escape(&"x".repeat(5000)).len(), 1500, "long remote text is truncated");
     }
 
     #[test]

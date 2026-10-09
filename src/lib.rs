@@ -35,6 +35,9 @@ pub async fn build(config: Config, db: db::Db) -> anyhow::Result<App> {
     ctx.maintenance.reload(&ctx.db, util::now_ms()).await?;
     ctx.reload_branding().await?;
     ctx.reload_auth().await?;
+    if ctx.auth().oidc.is_some_and(|o| !o.requires_role()) {
+        tracing::warn!("SSO has no required role: every account the identity provider signs in becomes an admin");
+    }
     let scheduler = Scheduler::new(ctx.clone());
     let state = web::AppState::new(ctx.clone(), scheduler.clone());
     if ctx.auth().oidc.is_none() && store::users::count(&ctx.db).await? == 0 {

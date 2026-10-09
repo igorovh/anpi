@@ -102,6 +102,7 @@
 
 <section class="card fade" id="sso">
   <h3>Single sign-on (OpenID Connect / Keycloak)</h3>
+  {% if sso_open_to_all %}<p class="error" role="alert">SSO has no required role or group, so <strong>every account your identity provider signs in becomes an admin here</strong>. If the realm allows self-registration or is shared, set a required role.</p>{% endif %}
   {% if sso_source == "env" %}
   <p>SSO is <strong>on</strong> and configured through environment variables (<code>ANPI_OIDC_*</code>) on the server. Change it there.</p>
   {% if let Some(r) = sso_redirect %}<p class="muted">Redirect URI for your provider:</p><pre class="copy" data-copy>{{ r }}</pre>{% endif %}
@@ -118,7 +119,7 @@
     </div>
     <div class="row">
       <label class="grow">Client secret<span class="hint">{% if sso_has_secret %}stored; leave empty to keep it{% else %}empty for public clients{% endif %}</span><input type="password" name="client_secret" autocomplete="new-password" placeholder="{% if sso_has_secret %}•••••••• (unchanged){% endif %}"></label>
-      <label>Required role or group<span class="hint">optional</span><input name="required_role" value="{{ sso_panel.required_role }}" placeholder="monitoring"></label>
+      <label>Required role or group<span class="hint">strongly recommended</span><input name="required_role" value="{{ sso_panel.required_role }}" placeholder="monitoring"></label>
       <label>Scopes<span class="hint">default: openid profile email</span><input name="scopes" value="{{ sso_panel.scopes }}" placeholder="openid profile email"></label>
     </div>
     {% if let Some(r) = sso_redirect %}<p class="muted small">Add this redirect URI in your provider: <code>{{ r }}</code></p>{% endif %}

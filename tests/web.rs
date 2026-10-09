@@ -397,3 +397,42 @@ async fn run_check_now_tests_unsaved_settings() {
     let bad = c.post("/admin/monitors/test", &[("csrf", &csrf), ("name", "t"), ("kind", "http"), ("url", "nope")]).await;
     assert!(serde_json::from_str::<serde_json::Value>(&bad.body).unwrap()["error"].as_str().unwrap().contains("URL"));
 }
+
+#[tokio::test]
+async fn login_redirect_cannot_be_bent_to_another_site() {
+    let app = app(config(&[])).await;
+    signed_in(&app).await;
+    for evil in ["/\t/evil.example", "/\t\\evil.example", "/\\evil.example", "/\r\n/evil.example"] {
+        let mut c = Client::new(anpi::web::router(app.state.clone()));
+        let r = c.post("/login", &[("username", "admin"), ("password", "a-long-password"), ("next", evil)]).await;
+        assert_eq!(r.status, StatusCode::SEE_OTHER);
+        assert_eq!(r.location(), "/admin", "{evil:?}");
+    }
+}
+
+#[tokio::test]
+async fn spoofed_forwarded_for_does_not_reset_the_login_limit() {
+    let app = app(config(&[("ANPI_TRUST_PROXY", "true")])).await;
+    signed_in(&app).await;
+    let router = anpi::web::router(app.state.clone());
+    let attempt = |spoof: String, password: &'static str| {
+        let router = router.clone();
+        async move {
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs([("username", "admin"), ("password", password)])
+                .finish();
+            let req = axum::http::Request::post("/login")
+                .header("host", "localhost")
+                .header("content-type", "application/x-www-form-urlencoded")
+                // The client controls everything before the address its proxy appends last.
+                .header("x-forwarded-for", format!("{spoof}, 198.51.100.7"))
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            tower::ServiceExt::oneshot(router, req).await.unwrap().status()
+        }
+    };
+    for i in 0..10 {
+        attempt(format!("10.0.0.{i}"), "wrong-password").await;
+    }
+    assert_eq!(attempt("10.9.9.9".into(), "a-long-password").await, StatusCode::TOO_MANY_REQUESTS);
+}

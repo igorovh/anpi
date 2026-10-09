@@ -136,6 +136,7 @@ struct SettingsPage {
     sso_panel: PanelSso,
     sso_has_secret: bool,
     sso_redirect: Option<String>,
+    sso_open_to_all: bool,
     groups: Vec<GroupRow>,
     users: Vec<UserRow>,
     sso: bool,
@@ -179,6 +180,7 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
             SsoSource::Panel => "panel",
             SsoSource::Off => "off",
         },
+        sso_open_to_all: auth.oidc.as_ref().is_some_and(|o| !o.requires_role()),
         sso_redirect: auth.base_url.map(|b| format!("{b}/auth/oidc/callback")),
         sso_panel,
         sso_has_secret,
@@ -270,7 +272,7 @@ pub async fn create_user(State(st): State<AppState>, user: CurrentUser, Form(f):
     if let Some(e) = error {
         return settings_response(&st, &user, None, None, Some(e)).await;
     }
-    store::users::create_local(st.db(), username, &password::hash(&f.password)?).await?;
+    store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?).await?;
     Ok(Redirect::to("/admin/settings?notice=created").into_response())
 }
 
@@ -298,7 +300,8 @@ pub async fn change_password(State(st): State<AppState>, user: CurrentUser, Form
     let Some(hash) = u.password_hash.as_deref() else {
         return Err(AppError::bad_request("This account signs in with SSO."));
     };
-    let error = if !password::verify(&f.current, hash) {
+    let current_ok = password::verify_async(&f.current, Some(hash)).await.map_err(|_| AppError(StatusCode::SERVICE_UNAVAILABLE, "Server busy, try again".into()))?;
+    let error = if !current_ok {
         Some("Current password is wrong".to_string())
     } else if f.new_password != f.confirm {
         Some("New passwords do not match".to_string())
@@ -308,7 +311,7 @@ pub async fn change_password(State(st): State<AppState>, user: CurrentUser, Form
     if let Some(e) = error {
         return settings_response(&st, &user, None, None, Some(e)).await;
     }
-    store::users::set_password(st.db(), user.id, &password::hash(&f.new_password)?).await?;
+    store::users::set_password(st.db(), user.id, &password::hash_async(&f.new_password).await?).await?;
     // Sign out other devices; the current browser keeps a fresh session.
     store::users::delete_user_sessions(st.db(), user.id).await?;
     let token = store::users::create_session(st.db(), user.id, None).await?;

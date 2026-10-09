@@ -15,6 +15,14 @@ use crate::config::OidcConfig;
 use crate::util::{random_token, sha256_b64url};
 
 const PENDING_TTL: Duration = Duration::from_secs(600);
+const MAX_PENDING: usize = 10_000;
+
+#[derive(Debug)]
+pub enum BeginError {
+    /// Too many sign-ins are in progress; refuse rather than grow without bound.
+    Busy,
+    Provider(String),
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Discovery {
@@ -62,6 +70,10 @@ impl Oidc {
         serde_json::from_slice(&r.body).map_err(|e| format!("invalid JSON from {url}: {e}"))
     }
 
+    pub fn requires_role(&self) -> bool {
+        self.cfg.required_role.is_some()
+    }
+
     pub async fn discovery(&self) -> Result<&Discovery, String> {
         self.discovery
             .get_or_try_init(|| async {
@@ -76,12 +88,19 @@ impl Oidc {
     }
 
     /// Returns the provider URL to redirect to and the state value to bind to the browser.
-    pub async fn begin(&self, next: &str) -> Result<(String, String), String> {
-        let d = self.discovery().await?;
+    pub async fn begin(&self, next: &str) -> Result<(String, String), BeginError> {
+        {
+            let mut pending = self.pending.lock().expect("oidc lock");
+            pending.retain(|_, p| p.created.elapsed() < PENDING_TTL);
+            if pending.len() >= MAX_PENDING {
+                return Err(BeginError::Busy);
+            }
+        }
+        let d = self.discovery().await.map_err(BeginError::Provider)?;
         let state = random_token(24);
         let nonce = random_token(24);
         let verifier = random_token(48);
-        let mut url = url::Url::parse(&d.authorization_endpoint).map_err(|e| e.to_string())?;
+        let mut url = url::Url::parse(&d.authorization_endpoint).map_err(|e| BeginError::Provider(e.to_string()))?;
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", &self.cfg.client_id)
@@ -92,7 +111,6 @@ impl Oidc {
             .append_pair("code_challenge", &sha256_b64url(&verifier))
             .append_pair("code_challenge_method", "S256");
         let mut pending = self.pending.lock().expect("oidc lock");
-        pending.retain(|_, p| p.created.elapsed() < PENDING_TTL);
         pending.insert(state.clone(), Pending { nonce, verifier, next: next.to_string(), created: Instant::now() });
         Ok((url.to_string(), state))
     }
@@ -258,6 +276,19 @@ mod tests {
         let roles = collect_roles(&[&id, &access], "anpi");
         assert!(roles.contains("monitoring") && roles.contains("admin") && roles.contains("ops"));
         assert!(!roles.contains("ignored"), "roles of other clients must not count");
+    }
+
+    #[tokio::test]
+    async fn pending_sign_ins_are_capped() {
+        let cfg = OidcConfig { issuer: "https://kc".into(), client_id: "anpi".into(), client_secret: None, scopes: "openid".into(), required_role: None };
+        let oidc = Oidc::new(cfg, "https://s/auth/oidc/callback".into());
+        let d = Discovery { issuer: "https://kc".into(), authorization_endpoint: "https://kc/auth".into(), token_endpoint: "https://kc/token".into(), end_session_endpoint: None };
+        oidc.discovery.set(d).unwrap();
+        for _ in 0..MAX_PENDING {
+            assert!(oidc.begin("/admin").await.is_ok());
+        }
+        assert!(matches!(oidc.begin("/admin").await, Err(BeginError::Busy)), "unauthenticated requests cannot grow the map further");
+        assert_eq!(oidc.pending.lock().unwrap().len(), MAX_PENDING);
     }
 
     #[test]

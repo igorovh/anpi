@@ -215,6 +215,7 @@ async fn sso_can_be_enabled_from_the_panel_and_disabled_from_the_cli() {
     let r = admin.post("/admin/sso", &on.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
     assert!(app.state.oidc().is_some(), "applies without a restart");
+    assert!(admin.get("/admin/settings").await.body.contains("becomes an admin here"), "SSO without a required role is called out");
     assert!(admin.get("/admin").await.status.is_success(), "the admin who enabled it stays signed in");
 
     let mut visitor = Client::new(anpi::web::router(app.state.clone()));

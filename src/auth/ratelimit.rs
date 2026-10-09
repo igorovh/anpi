@@ -6,12 +6,21 @@ use std::time::{Duration, Instant};
 pub struct LoginLimiter {
     max_attempts: u32,
     window: Duration,
+    max_entries: usize,
     entries: Mutex<HashMap<IpAddr, (u32, Instant)>>,
 }
 
 impl LoginLimiter {
     pub fn new(max_attempts: u32, window: Duration) -> Self {
-        Self { max_attempts, window, entries: Mutex::new(HashMap::new()) }
+        Self::with_capacity(max_attempts, window, 50_000)
+    }
+
+    pub fn with_capacity(max_attempts: u32, window: Duration, max_entries: usize) -> Self {
+        Self { max_attempts, window, max_entries: max_entries.max(1), entries: Mutex::new(HashMap::new()) }
+    }
+
+    pub fn tracked(&self) -> usize {
+        self.entries.lock().expect("limiter lock").len()
     }
 
     pub fn is_blocked(&self, ip: IpAddr, now: Instant) -> bool {
@@ -21,8 +30,14 @@ impl LoginLimiter {
 
     pub fn record_failure(&self, ip: IpAddr, now: Instant) {
         let mut entries = self.entries.lock().expect("limiter lock");
-        if entries.len() > 10_000 {
+        if !entries.contains_key(&ip) && entries.len() >= self.max_entries {
             entries.retain(|_, (_, start)| now.duration_since(*start) < self.window);
+            // Still full: forget the oldest window so memory stays bounded.
+            if entries.len() >= self.max_entries
+                && let Some(oldest) = entries.iter().min_by_key(|(_, (_, start))| *start).map(|(k, _)| *k)
+            {
+                entries.remove(&oldest);
+            }
         }
         let e = entries.entry(ip).or_insert((0, now));
         if now.duration_since(e.1) >= self.window {
@@ -55,6 +70,20 @@ mod tests {
         assert!(!l.is_blocked(ip, t0 + Duration::from_secs(61)));
         l.record_failure(ip, t0 + Duration::from_secs(61));
         assert!(!l.is_blocked(ip, t0 + Duration::from_secs(61)), "counter restarts after the window");
+    }
+
+    #[test]
+    fn memory_stays_bounded_and_recent_blocks_survive() {
+        let l = LoginLimiter::with_capacity(1, Duration::from_secs(60), 100);
+        let t0 = Instant::now();
+        let target: IpAddr = "203.0.113.200".parse().unwrap();
+        for i in 0..1_000u32 {
+            let ip = IpAddr::V6(std::net::Ipv6Addr::from(u128::from(i)));
+            l.record_failure(ip, t0);
+        }
+        assert!(l.tracked() <= 100, "tracked {}", l.tracked());
+        l.record_failure(target, t0 + Duration::from_secs(1));
+        assert!(l.is_blocked(target, t0 + Duration::from_secs(1)), "the newest offender is kept");
     }
 
     #[test]

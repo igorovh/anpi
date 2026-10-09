@@ -1,5 +1,6 @@
 (function () {
   "use strict";
+  var assetVersion = (document.currentScript && document.currentScript.src.split("?v=")[1]) || "";
   var html = document.documentElement;
 
   var toggle = document.getElementById("theme-toggle");
@@ -343,10 +344,9 @@
     box.querySelector(".overall-label").textContent = text;
   }
 
-  var es = new EventSource(source);
-  es.onmessage = function (msg) {
+  function onEvent(data) {
     var ev;
-    try { ev = JSON.parse(msg.data); } catch (e) { return; }
+    try { ev = JSON.parse(data); } catch (e) { return; }
     document.querySelectorAll('[data-monitor="' + ev.monitor_id + '"]').forEach(function (row) {
       var st = row.querySelector("[data-role=status]");
       if (row.dataset.aggregate !== undefined) {
@@ -367,5 +367,32 @@
       if (parent) recomputeParent(parent);
     }
     updateOverall();
+  }
+
+  // Tabs share one connection through a SharedWorker; without it, a hidden tab lets go of its own.
+  if (window.SharedWorker) {
+    var port = null;
+    var connect = function () {
+      try {
+        port = new SharedWorker("/static/events-worker.js?v=" + assetVersion, { name: "anpi-events" }).port;
+      } catch (e) { port = null; return; }
+      port.onmessage = function (m) { onEvent(m.data); };
+      port.start();
+      port.postMessage({ sub: source });
+    };
+    connect();
+    window.addEventListener("pagehide", function () { if (port) port.postMessage({ unsub: source }); });
+    window.addEventListener("pageshow", function (e) { if (e.persisted && port) port.postMessage({ sub: source }); });
+    if (port) return;
+  }
+  var es = null;
+  var open = function () {
+    if (es) return;
+    es = new EventSource(source);
+    es.onmessage = function (msg) { onEvent(msg.data); };
   };
+  var close = function () { if (es) { es.close(); es = null; } };
+  document.addEventListener("visibilitychange", function () { if (document.hidden) close(); else open(); });
+  window.addEventListener("pagehide", close);
+  if (!document.hidden) open();
 })();

@@ -20,7 +20,7 @@
   {% for m in g.monitors %}
   <article class="service{% if !m.children.is_empty() %} parent{% endif %}" data-monitor="{{ m.id }}"{% if !m.children.is_empty() %} data-aggregate="{{ m.aggregate }}"{% endif %}>
     <div class="service-head">
-      <h3>{% if !m.children.is_empty() %}<button class="tree-toggle open" type="button" data-toggle="{{ m.id }}" aria-expanded="true" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}{{ m.name }}{% if !m.children.is_empty() %}<span class="sub-count">{{ m.children.len() }} component{% if m.children.len() != 1 %}s{% endif %}</span>{% endif %}</h3>
+      <h3>{{ m.name }}{% if !m.children.is_empty() %}<span class="sub-count">{{ m.children.len() }} component{% if m.children.len() != 1 %}s{% endif %}</span><button class="tree-toggle after open" type="button" data-toggle="{{ m.id }}" aria-expanded="true" title="Hide details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>{% endif %}</h3>
       <span class="status {{ m.status_class }}" data-role="status"><span class="dot"></span><span data-role="label">{{ m.status_label }}</span></span>
     </div>
     <div class="days" aria-label="Daily uptime, last 30 days">

@@ -11,6 +11,10 @@ ANPI_DATA_DIR=/tmp/anpi-demo anpi
 
 The public status page is at `/` and the panel at `/admin`.
 
+## Running locally
+
+Use a debug build (`cargo run`) while working on anpi; `cargo build --release` takes minutes because of full LTO. Debug builds read `static/` from disk on every request, so CSS and JS edits only need a page reload. Templates in `templates/` are compiled in, so they need `cargo run` again, which is incremental and quick. Dependencies are compiled with optimisations once, so the debug server runs at close to release speed.
+
 ## Tests and layout
 
 ```sh

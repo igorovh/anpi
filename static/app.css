@@ -289,7 +289,7 @@ input[type="file"] { padding: 0.4rem; }
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
   padding: 0.7rem 2rem; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.incidents .group-title { margin: -1.7rem -2rem 1rem; }
+.incidents .group-title { margin: -1.7rem -2rem 1.7rem; }
 .service { padding: 1.2rem 2rem 1.1rem; border-bottom: 1px solid var(--line); }
 .service:last-child { border-bottom: 0; }
 .service-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.65rem; }
@@ -317,7 +317,7 @@ input[type="file"] { padding: 0.4rem; }
   .monitor-row .beats { grid-column: 1 / -1; }
   .monitor-row .metric { display: none; }
   .group-head, .group-title { padding-left: 1.1rem; padding-right: 1.1rem; }
-  .incidents .group-title { margin: -1.3rem -1.1rem 1rem; }
+  .incidents .group-title { margin: -1.3rem -1.1rem 1.3rem; }
   .service { padding: 1rem 1.1rem; }
   .stat { padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--line); }
   .page > .grid2 { grid-template-columns: 1fr; }
@@ -334,6 +334,7 @@ input[type="file"] { padding: 0.4rem; }
 .tree-toggle:hover { color: var(--ink); background: var(--raised); }
 .tree-toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
 .tree-toggle.open svg { transform: rotate(90deg); }
+.tree-toggle.after { margin: 0 0 0 0.3rem; vertical-align: middle; }
 .sub-count { margin-left: 0.6rem; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
 .service.parent:has(+ .service.child:not([hidden])) { border-bottom: 1px dashed var(--line); }
 .service.child { padding: 0.55rem 2rem; display: grid; grid-template-columns: minmax(8rem, 1fr) 2fr; align-items: center; gap: 1.2rem; }

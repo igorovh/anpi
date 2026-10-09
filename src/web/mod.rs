@@ -215,6 +215,9 @@ pub fn safe_next(next: Option<&str>) -> String {
 #[folder = "static/"]
 struct Assets;
 
+// Debug builds read assets from disk on every request, so edits show up on reload.
+const ASSET_CACHE: &str = if cfg!(debug_assertions) { "no-cache" } else { "public, max-age=604800" };
+
 async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
     match Assets::get(&path) {
         Some(file) => {
@@ -222,7 +225,7 @@ async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) ->
             (
                 [
                     (header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
-                    (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=604800")),
+                    (header::CACHE_CONTROL, HeaderValue::from_static(ASSET_CACHE)),
                 ],
                 file.data,
             )

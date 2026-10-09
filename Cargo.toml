@@ -54,6 +54,10 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 
+# Dependencies are optimised once; the anpi crate itself stays quick to rebuild.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

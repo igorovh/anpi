@@ -258,10 +258,10 @@ async fn origin_guard(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-async fn healthz(State(st): State<AppState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").execute(st.db()).await {
-        Ok(_) => (StatusCode::OK, "ok"),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "database unavailable"),
+async fn healthz(State(st): State<AppState>) -> Response {
+    match crate::selfcheck::health(&st.ctx).await {
+        Ok(()) => (StatusCode::OK, "ok").into_response(),
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, e).into_response(),
     }
 }
 
@@ -304,6 +304,8 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/export", get(settings::export))
         .route("/admin/branding", post(branding::save_site_name))
         .route("/admin/sso", post(settings::save_sso))
+        .route("/admin/settings/reports", post(settings::save_report))
+        .route("/admin/settings/heartbeat", post(settings::save_heartbeat))
         .route("/admin/sso/test", post(settings::test_sso))
         .route(
             "/admin/branding/logo",

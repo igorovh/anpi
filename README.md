@@ -26,8 +26,8 @@ or `docker compose up -d` with the included [`docker-compose.yml`](docker-compos
 Download an archive for your platform from [Releases](https://github.com/igorovh/anpi/releases): Linux x86_64 and ARM64 (static, any distribution), Windows x86_64 and macOS (Apple silicon). Each archive includes the systemd unit from `deploy/`.
 
 ```sh
-tar xzf anpi-v0.2.1-x86_64-unknown-linux-musl.tar.gz
-./anpi-v0.2.1-x86_64-unknown-linux-musl/anpi      # listens on 0.0.0.0:3000, data in ./data
+tar xzf anpi-v0.2.2-x86_64-unknown-linux-musl.tar.gz
+./anpi-v0.2.2-x86_64-unknown-linux-musl/anpi      # listens on 0.0.0.0:3000, data in ./data
 ```
 
 Later, `sudo anpi update` installs the newest release and restarts the service ([details](docs/configuration.md#updating)).

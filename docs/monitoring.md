@@ -33,6 +33,17 @@ Each monitor has its own interval (default 60 s), retry interval while failing (
 
 Discord, Telegram, ntfy, e-mail (SMTP) and a generic JSON webhook. Add channels under **Notifications**, use **Send test**, then tick them in a monitor's settings. Alerts are sent when a monitor goes down, when it comes back (with the downtime) and when a certificate is about to expire. **Maintenance windows** turn alerts off for chosen monitors; checks keep running and are shown as maintenance.
 
+## Reports
+
+**Settings → Reports** sends a daily or weekly summary to the channels you pick, at an hour in your time zone. It lists overall uptime and the number of checks, incidents and downtime, the monitors that had problems (the worst ten by name), anything that is down right now, and monitoring coverage: the share of the period in which anpi itself was running and checking, with the times it was not. **Send a report now** sends one for the last day or week. If anpi was off when a report was due, it sends the missed one when it starts again. Webhooks receive the same data as JSON under `report`.
+
+## Watching anpi itself
+
+A report that does not arrive is a sign that something is wrong, but it can take a day to notice. For an immediate alert:
+
+- **Heartbeat.** Under **Settings → Self-monitoring**, or with `ANPI_HEARTBEAT_URL`, enter a URL that anpi requests every minute while it is healthy, for example a check on [healthchecks.io](https://healthchecks.io). When the requests stop, because the server, its network or the checks are down, that service alerts you.
+- **`/healthz`** answers `503` when the database is unavailable or no check has finished for twice the shortest monitor interval (at least ten minutes), so an outside monitor or Docker can tell a stuck anpi from a working one.
+
 ## Incidents
 
 An incident opens when a monitor is marked down and closes when it comes back. The **Incidents** page in the panel lists them for every monitor, ongoing ones first, 25 per page, and can show only ongoing incidents. Each monitor page pages through its own incidents (10 per page) and recent checks (50 per page). The public status page shows only the most recent incidents of public monitors under their public names: 10 by default, configurable under **Settings**, where 0 hides the section.

@@ -12,6 +12,7 @@
 | `ANPI_TRUST_PROXY` | `false` | Behind a reverse proxy, take the client address for login rate limiting from the **last** `X-Forwarded-For` entry. Enable it only when a proxy always appends that entry (nginx `$proxy_add_x_forwarded_for`, Caddy and Traefik do); without a proxy, clients could set it themselves |
 | `ANPI_CLIENT_IP_HEADER` | – | Take the client address from this header instead, e.g. `CF-Connecting-IP` behind Cloudflare. Only safe when the firewall lets nothing but the proxy reach anpi |
 | `ANPI_TLS_CERT`, `ANPI_TLS_KEY` | – | PEM certificate and key; anpi then serves HTTPS itself, without a reverse proxy |
+| `ANPI_HEARTBEAT_URL` | – | URL requested every minute while anpi is healthy, e.g. a healthchecks.io check; overrides the panel setting |
 | `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on checks running at once |
 | `ANPI_LOG` | `info` | Log filter, e.g. `debug` or `anpi=debug` |
 | `ANPI_OIDC_ISSUER`, `ANPI_OIDC_CLIENT_ID`, `ANPI_OIDC_CLIENT_SECRET` | – | SSO from the environment; overrides the panel |
@@ -67,7 +68,7 @@ Monitors of IPv4-only sites and Discord alerts go through that gateway, so they 
 **2. Install anpi** with the systemd unit from the release archive:
 
 ```sh
-V=v0.2.1
+V=v0.2.2
 case $(dpkg --print-architecture) in amd64) T=x86_64-unknown-linux-musl;; arm64) T=aarch64-unknown-linux-musl;; esac
 cd /tmp
 curl -fLO https://github.com/igorovh/anpi/releases/download/$V/anpi-$V-$T.tar.gz

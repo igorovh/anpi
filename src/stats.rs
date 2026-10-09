@@ -37,6 +37,33 @@ pub async fn uptime_all(db: &Db, since: i64) -> sqlx::Result<HashMap<i64, f64>> 
     Ok(acc.into_iter().filter(|(_, (_, t))| *t > 0).map(|(id, (u, t))| (id, u as f64 * 100.0 / t as f64)).collect())
 }
 
+/// Per monitor in `[from, to)`: up checks, up + down checks, and all checks including pending and maintenance.
+pub async fn counts_between(db: &Db, from: i64, to: i64) -> sqlx::Result<HashMap<i64, (i64, i64, i64)>> {
+    let cut = agg_until(db).await?;
+    let hourly: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT monitor_id, SUM(up), SUM(up + down), SUM(total) FROM heartbeats_hourly WHERE hour >= ? AND hour < ? GROUP BY monitor_id",
+    )
+    .bind(from)
+    .bind(to.min(cut))
+    .fetch_all(db)
+    .await?;
+    let raw: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT monitor_id, SUM(status = 1), SUM(status IN (0, 1)), COUNT(*) FROM heartbeats WHERE ts >= ? AND ts < ? GROUP BY monitor_id",
+    )
+    .bind(from.max(cut))
+    .bind(to)
+    .fetch_all(db)
+    .await?;
+    let mut out: HashMap<i64, (i64, i64, i64)> = HashMap::new();
+    for (id, up, judged, total) in hourly.into_iter().chain(raw) {
+        let e = out.entry(id).or_default();
+        e.0 += up;
+        e.1 += judged;
+        e.2 += total;
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Point {
     pub t: i64,

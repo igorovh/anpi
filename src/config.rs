@@ -23,6 +23,8 @@ pub struct Config {
     pub client_ip_header: Option<http::HeaderName>,
     /// Certificate and key files; anpi serves HTTPS itself when both are set.
     pub tls: Option<(PathBuf, PathBuf)>,
+    /// URL pinged every minute while anpi is healthy; overrides the panel setting.
+    pub heartbeat_url: Option<String>,
     pub max_concurrent_checks: usize,
     pub oidc: Option<OidcConfig>,
 }
@@ -54,6 +56,10 @@ impl Config {
         let client_ip_header = get("ANPI_CLIENT_IP_HEADER")
             .map(|h| http::HeaderName::try_from(h.as_str()).with_context(|| format!("ANPI_CLIENT_IP_HEADER {h:?} is not a valid header name")))
             .transpose()?;
+        let heartbeat_url = get("ANPI_HEARTBEAT_URL");
+        if let Some(u) = &heartbeat_url {
+            url::Url::parse(u).context("ANPI_HEARTBEAT_URL must be a full URL")?;
+        }
         let tls = match (get("ANPI_TLS_CERT"), get("ANPI_TLS_KEY")) {
             (Some(cert), Some(key)) => Some((PathBuf::from(cert), PathBuf::from(key))),
             (None, None) => None,
@@ -83,7 +89,7 @@ impl Config {
             }
         };
 
-        Ok(Self { bind, database_path, base_url, trust_proxy, client_ip_header, tls, max_concurrent_checks, oidc })
+        Ok(Self { bind, database_path, base_url, trust_proxy, client_ip_header, tls, heartbeat_url, max_concurrent_checks, oidc })
     }
 
     pub fn secure_cookies(&self) -> bool {

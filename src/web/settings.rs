@@ -12,6 +12,8 @@ use crate::auth::oidc::Oidc;
 use crate::auth::password;
 use crate::auth::sso::{PanelSso, SsoSource, normalize_base_url};
 use super::backup::{self, ImportReport};
+use crate::report::{self, Frequency, ReportSettings};
+use crate::selfcheck;
 use crate::store::{self, settings::AppSettings};
 use crate::util::{format_ts, now_ms, parse_local_datetime};
 
@@ -142,7 +144,16 @@ struct SettingsPage {
     sso: bool,
     error: Option<String>,
     db_size: String,
+    report: ReportSettings,
+    report_channels: Vec<(i64, String, String, bool)>,
+    report_next: String,
+    heartbeat_url: String,
+    heartbeat_env: bool,
+    heartbeat_last: Option<(String, bool, String)>,
+    weekdays: Vec<(i64, &'static str)>,
 }
+
+const WEEKDAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&str>, s: Option<AppSettings>, error: Option<String>) -> AppResult<Response> {
     let s = match s {
@@ -168,6 +179,21 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
         .map(|g| GroupRow { monitors: monitors.iter().filter(|m| m.group_id == Some(g.id)).count(), id: g.id, name: g.name, sort_order: g.sort_order })
         .collect();
     let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+    let report = ReportSettings::load(st.db()).await?;
+    let report_channels = store::notifications::list(st.db())
+        .await?
+        .into_iter()
+        .filter(|c| c.active)
+        .map(|c| (c.id, c.name, c.kind, report.channels.contains(&c.id)))
+        .collect();
+    let when = |ms: i64| report::format_local(ms, report.tz_offset_min, "[weekday repr:short] [day padding:none] [month repr:short] [hour]:[minute]");
+    let report_next = report.next(now_ms()).map(when).unwrap_or_default();
+    let heartbeat_env = st.ctx.config.heartbeat_url.is_some();
+    let heartbeat_url = selfcheck::heartbeat_url(&st.ctx).await.unwrap_or_default();
+    let heartbeat_last = st.ctx.heartbeat.read().expect("heartbeat lock").clone().map(|p| match p.result {
+        Ok(code) => (format_ts(p.at), true, format!("HTTP {code}")),
+        Err(e) => (format_ts(p.at), false, e),
+    });
     let auth = st.ctx.auth();
     let mut sso_panel = PanelSso::load(st.db()).await?;
     let sso_has_secret = !sso_panel.client_secret.is_empty();
@@ -189,8 +215,94 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
         sso: st.oidc().is_some(),
         error,
         db_size: format!("{:.1} MB", pages.0 as f64 / 1_048_576.0),
+        report,
+        report_channels,
+        report_next,
+        heartbeat_url,
+        heartbeat_env,
+        heartbeat_last,
+        weekdays: (0..).zip(WEEKDAYS).collect(),
     };
     Ok((status, render(&page)?).into_response())
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct ReportForm {
+    csrf: String,
+    frequency: String,
+    weekday: String,
+    hour: String,
+    tz_offset: String,
+    channels: Vec<i64>,
+    action: String,
+}
+
+/// Saves the report schedule; "send" also sends a report for the last period right away.
+pub async fn save_report(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ReportForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let now = now_ms();
+    let old = ReportSettings::load(st.db()).await?;
+    let num = |v: &str, lo: i64, hi: i64, def: i64| v.trim().parse::<i64>().map(|n| n.clamp(lo, hi)).unwrap_or(def);
+    let mut s = ReportSettings {
+        frequency: Frequency::parse(&f.frequency),
+        weekday: num(&f.weekday, 0, 6, old.weekday),
+        hour: num(&f.hour, 0, 23, old.hour),
+        tz_offset_min: num(&f.tz_offset, -14 * 60, 14 * 60, old.tz_offset_min),
+        channels: f.channels.clone(),
+        last_sent: old.last_sent,
+    };
+    // A new schedule starts with its next slot, not with one that has already passed.
+    if (s.frequency, s.weekday, s.hour, s.tz_offset_min) != (old.frequency, old.weekday, old.hour, old.tz_offset_min) {
+        s.last_sent = s.due(now).unwrap_or(0);
+    }
+    s.save(st.db()).await?;
+    if f.action != "send" {
+        return Ok(Redirect::to("/admin/settings?notice=report-saved#reports").into_response());
+    }
+    let frequency = if s.frequency == Frequency::Off { Frequency::Daily } else { s.frequency };
+    let data = report::build(st.db(), &st.ctx.branding().site_name, frequency, now - frequency.period_ms(), now, s.tz_offset_min).await?;
+    let results = report::send(st.db(), data, &s.channels).await?;
+    if results.is_empty() {
+        return settings_response(&st, &user, None, None, Some("No channel to send to: tick one, or mark a channel as default.".into())).await;
+    }
+    let failed: Vec<String> = results.into_iter().filter_map(|(name, r)| r.err().map(|e| format!("{name}: {e}"))).collect();
+    if !failed.is_empty() {
+        return settings_response(&st, &user, None, None, Some(format!("The report could not be sent to {}", failed.join("; ")))).await;
+    }
+    Ok(Redirect::to("/admin/settings?notice=report-sent#reports").into_response())
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct HeartbeatForm {
+    csrf: String,
+    url: String,
+    action: String,
+}
+
+pub async fn save_heartbeat(State(st): State<AppState>, user: CurrentUser, Form(f): Form<HeartbeatForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    if st.ctx.config.heartbeat_url.is_none() {
+        let url = f.url.trim();
+        if !url.is_empty() && !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+            return settings_response(&st, &user, None, None, Some("The heartbeat URL must be a full http(s) URL.".into())).await;
+        }
+        store::settings::set(st.db(), selfcheck::HEARTBEAT_URL_KEY, url).await?;
+    }
+    if f.action != "test" {
+        return Ok(Redirect::to("/admin/settings?notice=saved#self-monitoring").into_response());
+    }
+    let Some(url) = selfcheck::heartbeat_url(&st.ctx).await else {
+        return settings_response(&st, &user, None, None, Some("Enter a heartbeat URL first.".into())).await;
+    };
+    let result = selfcheck::ping(&url).await;
+    let error = result.as_ref().err().map(|e| format!("The heartbeat ping failed: {e}"));
+    *st.ctx.heartbeat.write().expect("heartbeat lock") = Some(selfcheck::PingResult { at: now_ms(), result });
+    match error {
+        Some(e) => settings_response(&st, &user, None, None, Some(e)).await,
+        None => Ok(Redirect::to("/admin/settings?notice=heartbeat-ok#self-monitoring").into_response()),
+    }
 }
 
 pub async fn settings_page(State(st): State<AppState>, user: CurrentUser, Query(q): Query<NoticeQuery>) -> AppResult<Response> {

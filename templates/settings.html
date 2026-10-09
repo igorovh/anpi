@@ -74,6 +74,54 @@
   <div class="form-actions"><button type="submit" class="btn primary">Save</button></div>
 </form>
 
+<form method="post" action="/admin/settings/reports" class="form card fade" id="reports">
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <input type="hidden" name="tz_offset" value="{{ report.tz_offset_min }}" data-tz-offset>
+  <h3>Reports</h3>
+  <p class="muted">A summary of uptime and incidents sent to your notification channels. It also shows that anpi itself kept running.</p>
+  <div class="row">
+    <label>Send<select name="frequency">
+      <option value="off"{% if report.frequency.as_str() == "off" %} selected{% endif %}>Never</option>
+      <option value="daily"{% if report.frequency.as_str() == "daily" %} selected{% endif %}>Every day</option>
+      <option value="weekly"{% if report.frequency.as_str() == "weekly" %} selected{% endif %}>Every week</option>
+    </select></label>
+    <label>On<span class="hint">weekly reports</span><select name="weekday">
+      {% for (i, d) in weekdays %}<option value="{{ i }}"{% if report.weekday == *i %} selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select></label>
+    <label>At<span class="hint">your time zone</span><select name="hour">
+      {% for h in 0..24 %}<option value="{{ h }}"{% if report.hour == h %} selected{% endif %}>{{ "{:02}"|format(h) }}:00</option>{% endfor %}
+    </select></label>
+  </div>
+  <fieldset>
+    <legend>Channels</legend>
+    {% if report_channels.is_empty() %}
+    <p class="muted">No active channels. <a href="/admin/notifications/new">Add one</a> first.</p>
+    {% else %}
+    <div class="row checks-row">
+      {% for (id, name, kind, on) in report_channels %}<label class="check"><input type="checkbox" name="channels" value="{{ id }}"{% if on %} checked{% endif %}> {{ name }} <span class="muted">{{ kind }}</span></label>{% endfor %}
+    </div>
+    <p class="muted small">None ticked: the default channels.</p>
+    {% endif %}
+  </fieldset>
+  {% if !report_next.is_empty() %}<p class="muted small">Next report: {{ report_next }}</p>{% endif %}
+  <div class="form-actions">
+    <button type="submit" class="btn primary" name="action" value="save">Save</button>
+    <button type="submit" class="btn" name="action" value="send">Send a report now</button>
+  </div>
+</form>
+
+<form method="post" action="/admin/settings/heartbeat" class="form card fade" id="self-monitoring">
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <h3>Self-monitoring</h3>
+  <p class="muted">While anpi is healthy it requests this URL every minute. A service such as healthchecks.io alerts you when the requests stop, for example because the server is down. <code>/healthz</code> answers 503 when checks stop running.</p>
+  <label>Heartbeat URL<span class="hint">{% if heartbeat_env %}set by ANPI_HEARTBEAT_URL{% else %}optional, e.g. https://hc-ping.com/your-uuid{% endif %}</span><input name="url" value="{{ heartbeat_url }}" spellcheck="false"{% if heartbeat_env %} disabled{% endif %}></label>
+  {% if let Some((when, ok, detail)) = heartbeat_last %}<p class="small"><span class="status {% if ok %}s-up{% else %}s-down{% endif %}"><span class="dot"></span>{% if ok %}Last ping OK{% else %}Last ping failed{% endif %}</span> <span class="muted">{{ when }} · {{ detail }}</span></p>{% endif %}
+  <div class="form-actions">
+    {% if !heartbeat_env %}<button type="submit" class="btn primary" name="action" value="save">Save</button>{% endif %}
+    <button type="submit" class="btn" name="action" value="test">Send a test ping</button>
+  </div>
+</form>
+
 <section class="card fade">
   <h3>Users</h3>
   {% if sso %}<p class="muted">Sign-in is handled by your identity provider; accounts appear here after their first login.</p>{% endif %}

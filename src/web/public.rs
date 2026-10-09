@@ -323,6 +323,7 @@ pub async fn push(State(st): State<AppState>, Path(token): Path<String>, Query(q
 
 pub fn event_stream(st: &AppState, public_only: bool) -> Sse<impl Stream<Item = Result<Event, Infallible>> + use<>> {
     let rx = st.ctx.events.subscribe();
+    let shutdown = st.ctx.shutdown.clone().cancelled_owned();
     let stream = futures_util::stream::unfold(rx, move |mut rx| async move {
         loop {
             match rx.recv().await {
@@ -341,6 +342,7 @@ pub fn event_stream(st: &AppState, public_only: bool) -> Sse<impl Stream<Item = 
             }
         }
     });
+    let stream = futures_util::StreamExt::take_until(stream, shutdown);
     Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(20)))
 }
 

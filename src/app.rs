@@ -1,6 +1,8 @@
+use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, RwLock};
 
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use crate::auth::sso::{self, AuthRuntime, PanelSso};
 use crate::config::Config;
@@ -44,12 +46,28 @@ pub struct Ctx {
     pub maintenance: MaintenanceCache,
     pub branding: RwLock<Branding>,
     pub auth: RwLock<AuthRuntime>,
+    /// When the last check of any monitor finished; `/healthz` fails when it gets old.
+    pub last_check: AtomicI64,
+    pub heartbeat: RwLock<Option<crate::selfcheck::PingResult>>,
+    /// Cancelled on shutdown so long-lived responses such as live updates end.
+    pub shutdown: CancellationToken,
 }
 
 impl Ctx {
     pub fn new(db: Db, config: Config) -> Arc<Self> {
         let (events, _) = broadcast::channel(1024);
-        Arc::new(Self { writer: Writer::spawn(db.clone()), db, config, events, maintenance: MaintenanceCache::default(), branding: RwLock::default(), auth: RwLock::default() })
+        Arc::new(Self {
+            writer: Writer::spawn(db.clone()),
+            db,
+            config,
+            events,
+            maintenance: MaintenanceCache::default(),
+            branding: RwLock::default(),
+            auth: RwLock::default(),
+            last_check: AtomicI64::new(crate::util::now_ms()),
+            heartbeat: RwLock::default(),
+            shutdown: CancellationToken::new(),
+        })
     }
 }
 

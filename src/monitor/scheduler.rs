@@ -99,6 +99,8 @@ impl Scheduler {
         if m.kind() == MonitorKind::Aggregate {
             return;
         }
+        // A monitor that has just started has not had the chance to check yet.
+        self.ctx.last_check.store(crate::util::now_ms(), std::sync::atomic::Ordering::Relaxed);
         let cancel = CancellationToken::new();
         let (push_rx, push_token) = match (m.kind(), &m.push_token) {
             (MonitorKind::Push, Some(token)) => {
@@ -176,6 +178,7 @@ async fn run_monitor(
 
 pub(crate) async fn process(ctx: &Arc<Ctx>, m: &mut Monitor, state: &mut MonitorState, outcome: CheckOutcome) -> Status {
     let now = now_ms();
+    ctx.last_check.store(now, std::sync::atomic::Ordering::Relaxed);
     let in_maintenance = ctx.maintenance.active_for(m.id, now);
     let (status, transition) = state.apply(outcome.ok, m.failure_threshold.max(1) as u32, in_maintenance);
 

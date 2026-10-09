@@ -17,6 +17,7 @@ pub enum EventKind {
     Up { downtime_ms: Option<i64> },
     SslExpiring { days_left: i64, expires_at: i64 },
     Test,
+    Report(Box<crate::report::ReportData>),
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +38,7 @@ impl NotifyEvent {
             EventKind::Up { .. } => "up",
             EventKind::SslExpiring { .. } => "ssl_expiring",
             EventKind::Test => "test",
+            EventKind::Report(_) => "report",
         }
     }
 
@@ -57,10 +59,14 @@ impl NotifyEvent {
             EventKind::SslExpiring { days_left, .. } if *days_left < 0 => format!("⚠️ {n}: certificate expired"),
             EventKind::SslExpiring { days_left, .. } => format!("⚠️ {n}: certificate expires in {days_left} days"),
             EventKind::Test => "anpi test notification".to_string(),
+            EventKind::Report(r) => r.title(),
         }
     }
 
     pub fn body(&self) -> String {
+        if let EventKind::Report(r) = &self.kind {
+            return r.body();
+        }
         let mut lines = Vec::new();
         if !self.message.is_empty() {
             lines.push(self.message.clone());
@@ -83,6 +89,8 @@ impl NotifyEvent {
             EventKind::Up { .. } => 0x7fa37a,
             EventKind::SslExpiring { .. } => 0xc9a45c,
             EventKind::Test => 0x6f8fb0,
+            EventKind::Report(ref r) if r.incidents == 0 && r.down_now.is_empty() => 0x7fa37a,
+            EventKind::Report(_) => 0xc9a45c,
         }
     }
 }
@@ -169,9 +177,9 @@ async fn post_json(url: &str, body: serde_json::Value, extra: &[(&str, String)])
 }
 
 /// Error messages can quote monitored responses, so Discord must not render them as markdown links or formatting.
-fn discord_escape(s: &str) -> String {
+fn discord_escape(s: &str, limit: usize) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars().take(1500) {
+    for c in s.chars().take(limit) {
         if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '[' | ']' | '(' | ')' | '#' | '-' | '@' | '<') {
             out.push('\\');
         }
@@ -193,8 +201,9 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
             let payload = json!({
                 "username": if cfg.username.is_empty() { "anpi" } else { cfg.username.as_str() },
                 "embeds": [{
-                    "title": discord_escape(&ev.title()),
-                    "description": discord_escape(&ev.body()),
+                    "title": discord_escape(&ev.title(), 250),
+                    // Reports are long but built by anpi; alerts can quote untrusted responses.
+                    "description": discord_escape(&ev.body(), if matches!(ev.kind, EventKind::Report(_)) { 3800 } else { 1500 }),
                     "color": ev.color(),
                     "timestamp": ts,
                 }],
@@ -221,6 +230,7 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
                 EventKind::Up { .. } => "green_circle",
                 EventKind::SslExpiring { .. } => "warning",
                 EventKind::Test => "test_tube",
+                EventKind::Report(_) => "bar_chart",
             };
             let payload = json!({ "topic": cfg.topic, "title": ev.title(), "message": ev.body(), "priority": priority, "tags": [tag] });
             let auth: Vec<(&str, String)> =
@@ -228,13 +238,16 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
             post_json(server, payload, &auth).await
         }
         "webhook" => {
-            let payload = json!({
-                "event": ev.code(),
-                "title": ev.title(),
-                "message": ev.message,
-                "monitor": { "name": ev.monitor_name, "parent": ev.parent_name, "group": ev.group_name, "target": ev.target },
-                "at": ev.at,
-            });
+            let payload = match &ev.kind {
+                EventKind::Report(r) => json!({ "event": ev.code(), "title": ev.title(), "message": ev.body(), "report": r, "at": ev.at }),
+                _ => json!({
+                    "event": ev.code(),
+                    "title": ev.title(),
+                    "message": ev.message,
+                    "monitor": { "name": ev.monitor_name, "parent": ev.parent_name, "group": ev.group_name, "target": ev.target },
+                    "at": ev.at,
+                }),
+            };
             post_json(&cfg.url, payload, &[]).await
         }
         "email" => send_email(cfg, ev).await,
@@ -340,10 +353,10 @@ mod tests {
 
     #[test]
     fn discord_text_cannot_inject_links_or_mentions() {
-        let e = discord_escape("JSONPath $.x = \"[click](https://evil.example)\" @everyone");
+        let e = discord_escape("JSONPath $.x = \"[click](https://evil.example)\" @everyone", 1500);
         assert!(!e.contains("[click](") && e.contains("\\[click\\]\\("), "{e}");
         assert!(e.contains("\\@everyone"));
-        assert_eq!(discord_escape(&"x".repeat(5000)).len(), 1500, "long remote text is truncated");
+        assert_eq!(discord_escape(&"x".repeat(5000), 1500).len(), 1500, "long remote text is truncated");
     }
 
     #[test]

@@ -13,6 +13,7 @@ use crate::checks::{self, content, dns, status_codes::StatusMatcher};
 use crate::models::{ContentKind, IpFamily, Monitor, MonitorGroup, MonitorInput, MonitorKind, Status};
 use crate::stats;
 use crate::store;
+use crate::store::monitors::Position;
 use crate::util::{DAY_MS, HOUR_MS, format_duration_ms, format_ms, format_pct, format_ts, now_ms};
 
 #[derive(Deserialize)]
@@ -150,6 +151,16 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
     })
 }
 
+/// Dropping above or below `anchor` makes the monitor its sibling: same group, same parent.
+pub fn plan_reorder(all: &[Monitor], group_ids: &[i64], id: i64, anchor: i64, after: bool) -> Result<(Option<i64>, Option<i64>, Position), String> {
+    let a = all.iter().find(|m| m.id == anchor).ok_or("Target monitor not found")?;
+    if anchor == id {
+        return Err("A monitor cannot be placed next to itself".into());
+    }
+    let (group, parent) = plan_move(all, group_ids, id, a.group_id, a.parent_id)?;
+    Ok((group, parent, if after { Position::After(anchor) } else { Position::Before(anchor) }))
+}
+
 /// Works out where a dragged monitor lands; nesting puts it in its parent's group.
 pub fn plan_move(all: &[Monitor], group_ids: &[i64], id: i64, group: Option<i64>, parent: Option<i64>) -> Result<(Option<i64>, Option<i64>), String> {
     if !all.iter().any(|m| m.id == id) {
@@ -182,6 +193,9 @@ pub struct MoveForm {
     csrf: String,
     group_id: String,
     parent_id: String,
+    /// Set when the monitor is dropped above or below another one.
+    anchor_id: String,
+    place: String,
 }
 
 fn parse_opt_id(v: &str) -> Result<Option<i64>, String> {
@@ -195,12 +209,18 @@ pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
     user.check_csrf(&f.csrf)?;
     let all = store::monitors::list(st.db()).await?;
     let group_ids: Vec<i64> = store::groups::list(st.db()).await?.iter().map(|g| g.id).collect();
-    let plan = parse_opt_id(&f.group_id)
-        .and_then(|g| parse_opt_id(&f.parent_id).map(|p| (g, p)))
-        .and_then(|(g, p)| plan_move(&all, &group_ids, id, g, p));
+    let plan = match parse_opt_id(&f.anchor_id) {
+        Ok(Some(anchor)) => plan_reorder(&all, &group_ids, id, anchor, f.place == "after"),
+        Ok(None) => parse_opt_id(&f.group_id).and_then(|g| parse_opt_id(&f.parent_id).map(|p| (g, p))).and_then(|(g, p)| {
+            // Dropping on a group header sends the monitor to the end of that group.
+            let position = if p.is_none() { Position::End } else { Position::Keep };
+            plan_move(&all, &group_ids, id, g, p).map(|(g, p)| (g, p, position))
+        }),
+        Err(e) => Err(e),
+    };
     match plan {
-        Ok((group, parent)) => {
-            store::monitors::move_to(st.db(), id, group, parent).await?;
+        Ok((group, parent, position)) => {
+            store::monitors::place(st.db(), id, group, parent, position).await?;
             Ok(axum::Json(serde_json::json!({ "ok": true })).into_response())
         }
         Err(e) => Ok((StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "ok": false, "error": e }))).into_response()),
@@ -973,6 +993,16 @@ mod tests {
         assert_eq!(plan_move(&all, &[10, 20], 2, None, Some(1)), Ok((Some(10), Some(1))));
         assert_eq!(plan_move(&all, &[10, 20], 3, Some(20), None), Ok((Some(20), None)), "dropping on a group un-nests");
         assert_eq!(plan_move(&all, &[10, 20], 3, None, None), Ok((None, None)), "no group");
+    }
+
+    #[test]
+    fn dropping_next_to_a_monitor_makes_it_a_sibling() {
+        let all = [mon(1, Some(10), None), mon(2, Some(20), None), mon(3, Some(10), Some(1)), mon(4, None, None)];
+        assert_eq!(plan_reorder(&all, &[10, 20], 4, 2, true), Ok((Some(20), None, Position::After(2))), "takes the anchor's group");
+        assert_eq!(plan_reorder(&all, &[10, 20], 4, 3, false), Ok((Some(10), Some(1), Position::Before(3))), "next to a sub-monitor nests it too");
+        assert!(plan_reorder(&all, &[10, 20], 1, 3, false).unwrap_err().contains("own parent"), "a parent cannot go beside its own child");
+        assert!(plan_reorder(&all, &[10, 20], 2, 2, false).is_err());
+        assert!(plan_reorder(&all, &[10, 20], 2, 99, false).is_err());
     }
 
     #[test]

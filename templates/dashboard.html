@@ -67,7 +67,7 @@
 <section class="monitor-list fade" data-drag-list>
   {% for g in groups %}
   {% if let Some(name) = g.name %}
-  <div class="group-head drop-group{% if g.id.is_none() %} loose{% endif %}" data-group-id="{{ g.id.unwrap_or_default() }}"{% if g.id.is_none() %} data-no-group{% endif %}>
+  <div class="group-head drop-group{% if g.id.is_none() %} loose{% endif %}" data-group-id="{% if let Some(id) = g.id %}{{ id }}{% endif %}"{% if g.id.is_none() %} data-no-group{% endif %}>
     {{ name }} <span class="muted">{{ g.items.len() }}</span>
     {% if g.id.is_some() && g.items.is_empty() %}<span class="muted empty-note">empty · drop monitors here</span>{% endif %}
   </div>

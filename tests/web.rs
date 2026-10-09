@@ -560,3 +560,42 @@ async fn bulk_actions_pause_move_and_delete_selected_monitors() {
     assert!(!c.get("/admin").await.body.contains("Drag a monitor"));
     app.scheduler.shutdown().await;
 }
+
+#[tokio::test]
+async fn monitors_can_be_reordered_and_moved_out_of_groups() {
+    use anpi::models::MonitorInput;
+    let app = app(config(&[])).await;
+    let db = &app.ctx.db;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let group = anpi::store::groups::create(db, "Prod", 0).await.unwrap();
+    let mk = |n: &str, g: Option<i64>| MonitorInput { group_id: g, active: false, ..MonitorInput::http(n, "https://example.com") };
+    let a = anpi::store::monitors::create(db, &mk("zeta", None)).await.unwrap();
+    let b = anpi::store::monitors::create(db, &mk("alpha", None)).await.unwrap();
+    let g = anpi::store::monitors::create(db, &mk("grouped", Some(group))).await.unwrap();
+    let names = || async { anpi::store::monitors::list(db).await.unwrap().into_iter().map(|m| m.name).collect::<Vec<_>>() };
+    assert_eq!(names().await, ["zeta", "alpha", "grouped"], "new monitors are appended, not sorted by name");
+
+    let mv = |id: i64, fields: Vec<(&'static str, String)>| {
+        let mut f: Vec<(&str, String)> = vec![("csrf", csrf.clone())];
+        f.extend(fields);
+        (format!("/admin/monitors/{id}/move"), f)
+    };
+    let (url, f) = mv(b, vec![("anchor_id", a.to_string()), ("place", "before".into())]);
+    let r = c.post(&url, &f.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert!(r.body.contains("\"ok\":true"), "{}", r.body);
+    assert_eq!(names().await, ["alpha", "zeta", "grouped"]);
+
+    let (url, f) = mv(a, vec![("anchor_id", g.to_string()), ("place", "after".into())]);
+    c.post(&url, &f.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert_eq!(names().await, ["alpha", "grouped", "zeta"]);
+    assert_eq!(anpi::store::monitors::get(db, a).await.unwrap().unwrap().group_id, Some(group), "dropping beside a monitor joins its group");
+
+    let dashboard = c.get("/admin").await.body;
+    assert!(dashboard.contains("data-group-id=\"\" data-no-group"), "the No group header sends an empty group");
+    let (url, f) = mv(g, vec![("group_id", String::new()), ("parent_id", String::new())]);
+    let r = c.post(&url, &f.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    assert!(r.body.contains("\"ok\":true"), "{}", r.body);
+    assert_eq!(anpi::store::monitors::get(db, g).await.unwrap().unwrap().group_id, None);
+    assert_eq!(names().await.last().unwrap(), "grouped", "dropping on a group header sends it to the end");
+}

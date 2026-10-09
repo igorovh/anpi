@@ -25,7 +25,7 @@ Each monitor has its own interval (default 60 s), retry interval while failing (
 
 **Response rules.** A response or WebSocket reply can be required to *contain* or *not contain* text, *match a regular expression*, or *have a JSON field*, optionally with a value (`$.status` equals `ok`). The form shows a summary such as *"Up when the status is 200-299 and JSON $.status equals “ok”"*. **Run check now** tries the settings before you save them and shows the status, timings and the start of the response.
 
-**Groups and sub-monitors.** Drag monitors onto a group header to move them, or onto another monitor to put them underneath, e.g. endpoints under an "API" aggregate. Parents show the worst status of their children, and the status page can collapse them.
+**Groups, order and sub-monitors.** Drag a monitor onto the top or bottom edge of another row to place it there, onto the middle of a row to put it underneath (e.g. endpoints under an "API" aggregate), or onto a group header to move it to the end of that group. The status page uses the same order. Parents show the worst status of their children, and the status page can collapse them.
 
 **Certificates.** HTTPS and WSS monitors warn at the configured window (default 14 days), then at 7, 3 and 1 days before expiry. Each step alerts once, and a renewed certificate starts the sequence again.
 

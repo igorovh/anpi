@@ -3,11 +3,11 @@ use crate::models::{Monitor, MonitorInput, MonitorKind};
 use crate::util::{now_ms, random_token};
 
 pub async fn list(db: &Db) -> sqlx::Result<Vec<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors ORDER BY name COLLATE NOCASE").fetch_all(db).await
+    sqlx::query_as("SELECT * FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(db).await
 }
 
 pub async fn list_public(db: &Db) -> sqlx::Result<Vec<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors WHERE public = 1 ORDER BY name COLLATE NOCASE").fetch_all(db).await
+    sqlx::query_as("SELECT * FROM monitors WHERE public = 1 ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(db).await
 }
 
 pub async fn list_active(db: &Db) -> sqlx::Result<Vec<Monitor>> {
@@ -29,8 +29,9 @@ pub async fn create(db: &Db, m: &MonitorInput) -> sqlx::Result<i64> {
         "INSERT INTO monitors (name, kind, target, port, method, headers, body, interval_s, retry_interval_s,
             timeout_s, failure_threshold, expected_status, ip_family, follow_redirects, ignore_tls, content_kind,
             content_value, content_expected, ssl_warn_days, dns_record_type, dns_server, push_token, active, public,
-            created_at, updated_at, group_id, public_name, parent_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            created_at, updated_at, group_id, public_name, parent_id, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM monitors)) RETURNING id",
     )
     .bind(&m.name)
     .bind(&m.kind)
@@ -157,8 +158,35 @@ pub async fn set_channels(db: &Db, monitor_id: i64, channel_ids: &[i64]) -> sqlx
 }
 
 /// Moves a monitor; a parent drags its sub-monitors into the same group.
+/// Where a moved monitor goes in the overall order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    Keep,
+    End,
+    Before(i64),
+    After(i64),
+}
+
 pub async fn move_to(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i64>) -> sqlx::Result<()> {
+    place(db, id, group_id, parent_id, Position::Keep).await
+}
+
+/// Moves a monitor (and its sub-monitors' group) and renumbers the order in one transaction.
+pub async fn place(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i64>, position: Position) -> sqlx::Result<()> {
     let mut tx = db.begin().await?;
+    if position != Position::Keep {
+        let mut order: Vec<i64> = sqlx::query_scalar("SELECT id FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(&mut *tx).await?;
+        order.retain(|m| *m != id);
+        let at = match position {
+            Position::Before(a) => order.iter().position(|m| *m == a),
+            Position::After(a) => order.iter().position(|m| *m == a).map(|i| i + 1),
+            _ => None,
+        };
+        order.insert(at.unwrap_or(order.len()), id);
+        for (n, m) in order.iter().enumerate() {
+            sqlx::query("UPDATE monitors SET sort_order = ? WHERE id = ?").bind(n as i64 + 1).bind(m).execute(&mut *tx).await?;
+        }
+    }
     sqlx::query("UPDATE monitors SET group_id = ?, parent_id = ?, updated_at = ? WHERE id = ?")
         .bind(group_id)
         .bind(parent_id)

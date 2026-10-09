@@ -200,23 +200,34 @@
     sync();
   }
 
-  // Drag monitors onto a group to move them, or onto another monitor to nest them.
+  // Drag monitors onto a group, onto another monitor to nest them, or onto a row's top or bottom edge to reorder.
   var dragList = document.querySelector("[data-drag-list]");
   if (dragList) {
     var dragged = null;
     var errorBox = document.querySelector(".drop-error");
     var clearOver = function () {
-      dragList.querySelectorAll(".drop-over").forEach(function (el) { el.classList.remove("drop-over"); });
+      dragList.querySelectorAll(".drop-over, .drop-before, .drop-after").forEach(function (el) {
+        el.classList.remove("drop-over", "drop-before", "drop-after");
+      });
     };
-    var targetFor = function (el) {
+    var targetFor = function (e) {
       if (!dragged) return null;
-      var group = el.closest(".drop-group");
-      if (group) return { el: group, group: group.dataset.groupId, parent: "" };
-      var row = el.closest(".monitor-row");
-      if (row && row.dataset.parent) row = dragList.querySelector('.monitor-row[data-monitor="' + row.dataset.parent + '"]');
-      if (!row || row === dragged || dragged.hasAttribute("data-has-children")) return null;
-      if (dragged.dataset.parent === row.dataset.monitor) return null;
-      return { el: row, group: "", parent: row.dataset.monitor };
+      var group = e.target.closest(".drop-group");
+      if (group) return { el: group, cls: "drop-over", body: { group_id: group.dataset.groupId, parent_id: "" } };
+      var row = e.target.closest(".monitor-row");
+      if (!row || row === dragged) return null;
+      // A parent cannot go beside its own sub-monitor.
+      if (row.dataset.parent && row.dataset.parent === dragged.dataset.monitor) return null;
+      var parentRow = row.dataset.parent ? dragList.querySelector('.monitor-row[data-monitor="' + row.dataset.parent + '"]') : row;
+      var canNest = !dragged.hasAttribute("data-has-children") && parentRow && parentRow !== dragged && dragged.dataset.parent !== parentRow.dataset.monitor;
+      if (row.dataset.parent && dragged.hasAttribute("data-has-children")) canNest = false;
+      var box = row.getBoundingClientRect();
+      var y = (e.clientY - box.top) / box.height;
+      var edge = canNest ? 0.3 : 0.5;
+      if (y < edge) return { el: row, cls: "drop-before", body: { anchor_id: row.dataset.monitor, place: "before" } };
+      if (y > 1 - edge) return { el: row, cls: "drop-after", body: { anchor_id: row.dataset.monitor, place: "after" } };
+      if (row.dataset.parent && dragged.hasAttribute("data-has-children")) return null;
+      return canNest ? { el: parentRow, cls: "drop-over", body: { group_id: "", parent_id: parentRow.dataset.monitor } } : null;
     };
     dragList.addEventListener("dragstart", function (e) {
       var row = e.target.closest && e.target.closest(".monitor-row");
@@ -234,18 +245,19 @@
       clearOver();
     });
     dragList.addEventListener("dragover", function (e) {
-      var t = targetFor(e.target);
+      var t = targetFor(e);
       clearOver();
       if (!t) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      t.el.classList.add("drop-over");
+      t.el.classList.add(t.cls);
     });
     dragList.addEventListener("drop", function (e) {
-      var t = targetFor(e.target);
+      var t = targetFor(e);
       if (!t) return;
       e.preventDefault();
-      var body = new URLSearchParams({ csrf: document.body.dataset.csrf, group_id: t.group, parent_id: t.parent });
+      var body = new URLSearchParams(t.body);
+      body.set("csrf", document.body.dataset.csrf);
       fetch("/admin/monitors/" + dragged.dataset.monitor + "/move", { method: "POST", body: body, credentials: "same-origin" })
         .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Move failed (" + r.status + ")" }; }); })
         .then(function (res) {

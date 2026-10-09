@@ -12,6 +12,7 @@ axum = { version = "0.8.9", features = ["macros", "multipart"] }
 axum-extra = { version = "0.12.6", features = ["cookie", "form", "typed-header"] }
 base64 = "0.23.1"
 bytes = "1.12.1"
+flate2 = "1.1.10"
 futures-util = { version = "0.3.34", features = ["sink"] }
 hex = "0.4.3"
 hickory-resolver = "0.26.3"
@@ -32,6 +33,7 @@ serde_json_path = "0.7.2"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 surge-ping = "0.9.1"
+tar = { version = "0.4.46", default-features = false }
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1.53.2", features = ["full"] }

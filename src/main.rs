@@ -12,13 +12,28 @@ const USAGE: &str = "usage:
   anpi disable-sso              turn off SSO set in the panel so passwords work again
   anpi demo                     fill an empty database with example monitors and history
   anpi export [file]            write the configuration as JSON (stdout by default)
-  anpi import <file> [--replace]  load a configuration export";
+  anpi import <file> [--replace]  load a configuration export
+  anpi version                  print the version
+  anpi update [--check] [--version X.Y.Z] [--no-restart]
+                                install the latest release from GitHub and restart the service
+  anpi update --rollback        go back to the binary that was replaced";
 
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_env("ANPI_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn")))
         .init();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // These work without a valid server configuration.
+    match args.first().map(String::as_str) {
+        Some("version" | "--version" | "-V") => {
+            println!("{}", anpi::update::CURRENT);
+            return ExitCode::SUCCESS;
+        }
+        Some("update") => return finish(update(&args[1..]).await),
+        _ => {}
+    }
 
     let config = match Config::from_env() {
         Ok(c) => c,
@@ -27,7 +42,6 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         None | Some("serve") => anpi::run(config).await,
         Some("healthcheck") => healthcheck(&config).await,
@@ -44,6 +58,10 @@ async fn main() -> ExitCode {
         },
         Some(_) => Err(anyhow::anyhow!(USAGE)),
     };
+    finish(result)
+}
+
+fn finish(result: anyhow::Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -51,6 +69,76 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+async fn update(args: &[String]) -> anyhow::Result<()> {
+    use anpi::update::{self, CURRENT, parse_version};
+    use anyhow::Context;
+    let flag = |f: &str| args.iter().any(|a| a == f);
+    let wanted = args.iter().position(|a| a == "--version").map(|i| args.get(i + 1).context(USAGE)).transpose()?;
+    if let Some(a) = args.iter().find(|a| a.starts_with("--") && !["--check", "--version", "--no-restart", "--rollback"].contains(&a.as_str())) {
+        anyhow::bail!("unknown option {a}\n{USAGE}");
+    }
+    let exe = std::env::current_exe()?.canonicalize()?;
+
+    if flag("--rollback") {
+        update::rollback(&exe)?;
+        eprintln!("restored the previous binary; if the database was upgraded, its backup sits next to it as *.before-<version>");
+        return restart(flag("--no-restart"));
+    }
+    let release = update::fetch_release(wanted.map(String::as_str)).await?;
+    let latest = release.version()?;
+    let current = parse_version(CURRENT).context("unexpected own version")?;
+    let tag = release.tag_name.trim_start_matches('v').to_string();
+
+    if flag("--check") {
+        println!("installed {CURRENT}, latest {tag}");
+        if latest > current {
+            println!("changes: {}\nrun `sudo anpi update` to install it", release.html_url);
+        }
+        return Ok(());
+    }
+    if wanted.is_none() && latest <= current {
+        eprintln!("anpi {CURRENT} is up to date");
+        return Ok(());
+    }
+    if latest == current {
+        eprintln!("anpi {CURRENT} is already installed");
+        return Ok(());
+    }
+
+    let target = update::TARGET.context("self-update supports Linux (x86_64, arm64) and macOS on Apple Silicon; download other builds from the releases page")?;
+    let (archive, sum) = release.archive_for(target).with_context(|| format!("release {tag} has no {target} build with a checksum"))?;
+    eprintln!("downloading anpi {tag} for {target}…");
+    let data = update::download(&archive.browser_download_url, "application/octet-stream", 256 * 1024 * 1024).await?;
+    let sum = update::download(&sum.browser_download_url, "application/octet-stream", 4096).await?;
+    update::verify_sha256(&data, &String::from_utf8_lossy(&sum))?;
+    let binary = update::extract_binary(&data)?;
+    update::replace_binary(&exe, &binary)?;
+
+    // Refuse a binary that cannot even report its version, e.g. a wrong architecture.
+    let reported = std::process::Command::new(&exe).arg("version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if reported.as_deref() != Some(tag.as_str()) {
+        update::rollback(&exe)?;
+        anyhow::bail!("the new binary did not start correctly (reported {reported:?}); kept {CURRENT}");
+    }
+    eprintln!("updated {CURRENT} → {tag} ({}); the previous binary is kept as {}", exe.display(), update::backup_path(&exe).display());
+    restart(flag("--no-restart"))
+}
+
+/// Restarts the systemd unit if one is running; otherwise says what to do.
+fn restart(skip: bool) -> anyhow::Result<()> {
+    use std::process::Command;
+    let under_systemd = std::path::Path::new("/run/systemd/system").exists();
+    let active = under_systemd && Command::new("systemctl").args(["is-active", "--quiet", "anpi"]).status().is_ok_and(|s| s.success());
+    if skip || !active {
+        eprintln!("restart anpi to run the new version");
+        return Ok(());
+    }
+    let ok = Command::new("systemctl").args(["restart", "anpi"]).status().is_ok_and(|s| s.success());
+    anyhow::ensure!(ok, "the binary was replaced but `systemctl restart anpi` failed; run it yourself");
+    eprintln!("restarted anpi.service");
+    Ok(())
 }
 
 async fn healthcheck(config: &Config) -> anyhow::Result<()> {

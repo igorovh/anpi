@@ -54,6 +54,16 @@ Checks are stored for 24 hours, then rolled up into hourly averages kept for a y
 - **IPv6 in Docker:** IPv6 monitors need IPv6 inside the container. Enable it in the Docker daemon or use `network_mode: host`.
 - **Ping:** ICMP needs `CAP_NET_RAW` (granted in the systemd unit) or unprivileged ICMP sockets through `net.ipv4.ping_group_range`, which Docker allows by default.
 
+## Updating
+
+**Binary (Linux, macOS on Apple Silicon):** `sudo anpi update` downloads the newest release from GitHub, checks its SHA-256, swaps the binary and restarts `anpi.service`.
+- `anpi update --check` only reports whether a newer version exists.
+- `--version 0.2.0` installs a specific release; `--no-restart` leaves the restart to you.
+- The replaced binary stays next to the new one as `anpi.old`; `sudo anpi update --rollback` puts it back.
+- Before a new version changes the database schema, anpi copies the database to `anpi.db.before-<version>`. After rolling back across such a change, restore that copy too.
+
+**Docker:** `docker compose pull && docker compose up -d`. Pin a tag such as `ghcr.io/igorovh/anpi:0.1` to get fixes without larger changes.
+
 ## Command line
 
 ```sh
@@ -64,6 +74,8 @@ anpi reset-password <user>    # set a new password from stdin and sign out old s
 anpi disable-sso              # turn off SSO configured in the panel
 anpi export [file]            # write the configuration as JSON (stdout by default)
 anpi import <file> [--replace]  # load a configuration export
+anpi version                  # print the version
+anpi update [--check]         # install the newest release (see Updating)
 ```
 
 ## Security notes

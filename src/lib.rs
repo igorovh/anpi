@@ -9,6 +9,7 @@ pub mod monitor;
 pub mod notify;
 pub mod retention;
 pub mod stats;
+pub mod update;
 pub mod store;
 pub mod util;
 pub mod web;

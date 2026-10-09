@@ -30,6 +30,8 @@ tar xzf anpi-v0.1.0-x86_64-unknown-linux-musl.tar.gz
 ./anpi-v0.1.0-x86_64-unknown-linux-musl/anpi      # listens on 0.0.0.0:3000, data in ./data
 ```
 
+Later, `sudo anpi update` installs the newest release and restarts the service ([details](docs/configuration.md#updating)).
+
 ### From source
 
 ```sh

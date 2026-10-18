@@ -45,6 +45,31 @@ pub async fn create(db: &Db, title: &str, starts_at: i64, ends_at: i64, all: boo
     Ok(id)
 }
 
+pub async fn get(db: &Db, id: i64) -> sqlx::Result<Option<Maintenance>> {
+    sqlx::query_as("SELECT * FROM maintenances WHERE id = ?").bind(id).fetch_optional(db).await
+}
+
+pub async fn update(db: &Db, id: i64, title: &str, starts_at: i64, ends_at: i64, all: bool, monitors: &[i64]) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE maintenances SET title = ?, starts_at = ?, ends_at = ?, all_monitors = ? WHERE id = ?")
+        .bind(title)
+        .bind(starts_at)
+        .bind(ends_at)
+        .bind(all)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM maintenance_monitors WHERE maintenance_id = ?").bind(id).execute(&mut *tx).await?;
+    for m in monitors {
+        sqlx::query("INSERT OR IGNORE INTO maintenance_monitors (maintenance_id, monitor_id) VALUES (?, ?)")
+            .bind(id)
+            .bind(m)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM maintenances WHERE id = ?").bind(id).execute(db).await?;
     Ok(())

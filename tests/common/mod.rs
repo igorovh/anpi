@@ -268,6 +268,22 @@ impl Client {
         self.send(req).await
     }
 
+    /// Calls the JSON API with a bearer token, without cookies.
+    pub async fn api(&mut self, method: &str, path: &str, token: &str, body: Option<serde_json::Value>) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder().method(method).uri(path).header(header::HOST, "localhost");
+        if !token.is_empty() {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let req = match body {
+            Some(b) => req.header(header::CONTENT_TYPE, "application/json").body(Body::from(b.to_string())),
+            None => req.body(Body::empty()),
+        };
+        let resp = self.router.clone().oneshot(req.unwrap()).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    }
+
     /// Reads the CSRF token embedded in any admin page.
     pub async fn csrf(&mut self) -> String {
         let page = self.get("/admin/settings").await;

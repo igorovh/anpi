@@ -46,6 +46,8 @@ PKCE is always used. The ID token's issuer, audience, expiry and nonce are check
 
 The same works offline with `anpi export` and `anpi import`.
 
+To keep the configuration in Git instead, manage it with the [Terraform provider](api.md#terraform) or the [REST API](api.md).
+
 ## Data and retention
 
 Checks are stored for 24 hours, then rolled up into hourly averages kept for a year; closed incidents are kept for a year. All three periods can be changed under **Settings**. Uptime figures and charts read across raw and hourly data, so pruning never changes them. A few dozen monitors stay well under 100 MB, and the current database size is shown in the settings.
@@ -141,6 +143,7 @@ anpi demo                     # fill an empty database with example data
 anpi healthcheck              # exit 0 if the local server is healthy (used by Docker)
 anpi reset-password <user>    # set a new password from stdin and sign out old sessions
 anpi disable-sso              # turn off SSO configured in the panel
+anpi api-token <name>         # create an API token for the REST API and Terraform (printed once)
 anpi export [file]            # write the configuration as JSON (stdout by default)
 anpi import <file> [--replace]  # load a configuration export
 anpi version                  # print the version
@@ -150,6 +153,7 @@ anpi update [--check]         # install the newest release (see Updating)
 ## Security notes
 
 - **Everyone who can sign in is an admin.** Admins can make anpi send requests to any address, including the local network (monitors, *Run check now*, webhooks and SSO tests), and monitored services can redirect HTTP checks elsewhere. That is what a monitor needs to do, so only give accounts to people you trust with that.
+- **API tokens act like an admin.** They can change every monitor, channel and maintenance window, but cannot open the panel, manage users or change settings. anpi stores only their SHA-256 hash; revoke a leaked token under **Settings → API tokens**.
 - **SSO without a required role** lets every account the identity provider signs in become an admin. The settings page warns about this; set a role or group unless the realm is yours alone.
 - **Sign-in is rate limited** per client address (10 failures per 15 minutes) and password hashing runs off the request threads with a small concurrency limit, so floods of sign-in attempts cannot stall the checks.
 - **Alerts quote monitored responses** in some messages (for example a JSON value that did not match). Discord messages are escaped and send no mentions.

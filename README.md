@@ -44,6 +44,7 @@ The public status page is at `/` and the panel at `/admin`.
 
 - [Monitoring](docs/monitoring.md): monitor types, response rules, groups and sub-monitors, alerts, the status page and its JSON API
 - [Configuration and deployment](docs/configuration.md): environment variables, SSO with Keycloak, data retention, systemd and Docker notes, command line
+- [REST API and Terraform](docs/api.md): API tokens, the JSON API and the [Terraform provider](https://github.com/igorovh/terraform-provider-anpi), which keeps monitors, groups, channels and maintenance windows in code
 - [Development](docs/development.md): example data, tests, project layout and releases
 
 ## License

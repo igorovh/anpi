@@ -149,6 +149,34 @@
   {% endif %}
 </section>
 
+<section class="card fade" id="api-tokens">
+  <h3>API tokens</h3>
+  <p class="muted">A token gives full access to monitors, groups, notification channels and maintenance windows through the <a href="https://github.com/igorovh/anpi/blob/master/docs/api.md">REST API</a> and the <a href="https://github.com/igorovh/terraform-provider-anpi">Terraform provider</a>. Tokens belong to this instance, not to a user, and keep working when the user who made them is deleted.</p>
+  {% if let Some((name, token)) = new_token %}
+  <p class="notice" role="status">Token “{{ name }}” created. Copy it now; it is not shown again.</p>
+  <pre class="copy" data-copy>{{ token }}</pre>
+  {% endif %}
+  {% if !api_tokens.is_empty() %}
+  <div class="list">
+    {% for t in api_tokens %}
+    <div class="list-row">
+      <span class="grow">{{ t.name }} <span class="muted">created {{ t.created }} · last used {{ t.last_used }}</span></span>
+      <form method="post" action="/admin/api-tokens/{{ t.id }}/delete" class="inline" data-confirm="Revoke token {{ t.name }}? Anything using it stops working.">
+        <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Revoke</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/admin/api-tokens" class="form inline-form">
+    <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+    <div class="row">
+      <label class="grow">Token name<input name="name" autocomplete="off" maxlength="60" placeholder="terraform" required></label>
+      <div class="form-actions"><button type="submit" class="btn">Create token</button></div>
+    </div>
+  </form>
+</section>
+
 <section class="card fade" id="sso">
   <h3>Single sign-on (OpenID Connect / Keycloak)</h3>
   {% if sso_open_to_all %}<p class="error" role="alert">SSO has no required role or group, so <strong>every account your identity provider signs in becomes an admin here</strong>. If the realm allows self-registration or is shared, set a required role.</p>{% endif %}

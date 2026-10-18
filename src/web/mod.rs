@@ -1,4 +1,5 @@
 mod admin;
+mod api;
 mod auth_routes;
 pub mod backup;
 mod branding;
@@ -272,6 +273,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(public::status_page))
         .route("/api/status.json", get(public::status_json))
         .route("/api/push/{token}", get(public::push).post(public::push))
+        .nest("/api/v1", api::router())
         .route("/events/public", get(public::public_events))
         .route("/healthz", get(healthz))
         .route("/static/{*path}", get(static_asset))
@@ -317,6 +319,8 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/groups/{id}/delete", post(branding::delete_group))
         .route("/brand/logo", get(branding::logo))
         .route("/admin/users/{id}/delete", post(settings::delete_user))
+        .route("/admin/api-tokens", post(settings::create_api_token))
+        .route("/admin/api-tokens/{id}/delete", post(settings::delete_api_token))
         .route("/admin/account/password", post(settings::change_password))
         .route(
             "/admin/import",

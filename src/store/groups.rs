@@ -6,6 +6,10 @@ pub async fn list(db: &Db) -> sqlx::Result<Vec<MonitorGroup>> {
     sqlx::query_as("SELECT * FROM monitor_groups ORDER BY sort_order, name COLLATE NOCASE").fetch_all(db).await
 }
 
+pub async fn get(db: &Db, id: i64) -> sqlx::Result<Option<MonitorGroup>> {
+    sqlx::query_as("SELECT * FROM monitor_groups WHERE id = ?").bind(id).fetch_optional(db).await
+}
+
 pub async fn create(db: &Db, name: &str, sort_order: i64) -> sqlx::Result<i64> {
     sqlx::query_scalar("INSERT INTO monitor_groups (name, sort_order, created_at) VALUES (?, ?, ?) RETURNING id")
         .bind(name)

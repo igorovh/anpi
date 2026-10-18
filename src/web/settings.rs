@@ -122,6 +122,13 @@ pub struct UserRow {
     pub is_me: bool,
 }
 
+pub struct TokenRow {
+    pub id: i64,
+    pub name: String,
+    pub created: String,
+    pub last_used: String,
+}
+
 pub struct GroupRow {
     pub id: i64,
     pub name: String,
@@ -151,11 +158,25 @@ struct SettingsPage {
     heartbeat_env: bool,
     heartbeat_last: Option<(String, bool, String)>,
     weekdays: Vec<(i64, &'static str)>,
+    api_tokens: Vec<TokenRow>,
+    /// Name and value of a token that was just created; it is shown only this once.
+    new_token: Option<(String, String)>,
 }
 
 const WEEKDAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&str>, s: Option<AppSettings>, error: Option<String>) -> AppResult<Response> {
+    settings_page_with(st, user, notice, s, error, None).await
+}
+
+async fn settings_page_with(
+    st: &AppState,
+    user: &CurrentUser,
+    notice: Option<&str>,
+    s: Option<AppSettings>,
+    error: Option<String>,
+    new_token: Option<(String, String)>,
+) -> AppResult<Response> {
     let s = match s {
         Some(s) => s,
         None => AppSettings::load(st.db()).await?,
@@ -222,8 +243,38 @@ async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&st
         heartbeat_env,
         heartbeat_last,
         weekdays: (0..).zip(WEEKDAYS).collect(),
+        api_tokens: store::api_tokens::list(st.db())
+            .await?
+            .into_iter()
+            .map(|t| TokenRow { id: t.id, name: t.name, created: format_ts(t.created_at), last_used: t.last_used_at.map(format_ts).unwrap_or_else(|| "never".into()) })
+            .collect(),
+        new_token,
     };
     Ok((status, render(&page)?).into_response())
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct ApiTokenForm {
+    csrf: String,
+    name: String,
+}
+
+pub async fn create_api_token(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ApiTokenForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let name = f.name.trim();
+    if name.is_empty() || name.chars().count() > 60 {
+        return settings_response(&st, &user, None, None, Some("Token name is required (up to 60 characters)".into())).await;
+    }
+    let (_, token) = store::api_tokens::create(st.db(), name).await?;
+    tracing::warn!(user = %user.username, token = name, "API token created");
+    settings_page_with(&st, &user, None, None, None, Some((name.to_string(), token))).await
+}
+
+pub async fn delete_api_token(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    store::api_tokens::delete(st.db(), id).await?;
+    Ok(Redirect::to("/admin/settings?notice=deleted#api-tokens").into_response())
 }
 
 #[derive(Deserialize, Default)]

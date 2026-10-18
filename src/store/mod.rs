@@ -1,3 +1,4 @@
+pub mod api_tokens;
 pub mod assets;
 pub mod groups;
 pub mod heartbeats;

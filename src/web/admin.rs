@@ -612,7 +612,7 @@ pub async fn new_monitor(State(st): State<AppState>, user: CurrentUser) -> AppRe
 }
 
 /// Checks references to other rows; only one level of nesting is allowed.
-async fn validate_with_groups(st: &AppState, f: &MonitorForm, editing: Option<i64>) -> AppResult<Result<MonitorInput, String>> {
+pub(super) async fn validate_with_groups(st: &AppState, f: &MonitorForm, editing: Option<i64>) -> sqlx::Result<Result<MonitorInput, String>> {
     let input = match f.validate() {
         Ok(i) => i,
         Err(e) => return Ok(Err(e)),

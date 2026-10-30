@@ -10,6 +10,7 @@ const USAGE: &str = "usage:
   anpi healthcheck              exit 0 if the local server answers /healthz
   anpi reset-password <user>    set a new password (read from stdin)
   anpi disable-sso              turn off SSO set in the panel so passwords work again
+  anpi api-token <name>         create an API token for the REST API and Terraform (printed once)
   anpi demo                     fill an empty database with example monitors and history
   anpi export [file]            write the configuration as JSON (stdout by default)
   anpi import <file> [--replace]  load a configuration export
@@ -50,6 +51,10 @@ async fn main() -> ExitCode {
             None => Err(anyhow::anyhow!(USAGE)),
         },
         Some("disable-sso") => disable_sso(&config).await,
+        Some("api-token") => match args.get(1) {
+            Some(name) => api_token(&config, name).await,
+            None => Err(anyhow::anyhow!(USAGE)),
+        },
         Some("demo") => demo(&config).await,
         Some("export") => export(&config, args.get(1)).await,
         Some("import") => match args.get(1) {
@@ -192,6 +197,16 @@ async fn disable_sso(config: &Config) -> anyhow::Result<()> {
     let db = anpi::db::open(&config.database_path).await?;
     anpi::auth::sso::disable(&db).await?;
     eprintln!("SSO turned off; restart anpi and sign in with a password (see `anpi reset-password` if needed)");
+    Ok(())
+}
+
+async fn api_token(config: &Config, name: &str) -> anyhow::Result<()> {
+    let name = name.trim();
+    anyhow::ensure!(!name.is_empty() && name.chars().count() <= 60, "the token name must be 1 to 60 characters");
+    let db = anpi::db::open(&config.database_path).await?;
+    let (_, token) = anpi::store::api_tokens::create(&db, name).await?;
+    eprintln!("API token \"{name}\" created; it is not shown again, revoke it under Settings → API tokens");
+    println!("{token}");
     Ok(())
 }
 

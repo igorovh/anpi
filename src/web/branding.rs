@@ -111,16 +111,21 @@ pub struct GroupForm {
     next: String,
 }
 
-fn validate_group(f: &GroupForm, default_order: i64) -> AppResult<(String, i64)> {
-    let name = f.name.trim();
+pub fn validate_group_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
     if name.is_empty() || name.chars().count() > 60 {
-        return Err(AppError::bad_request("Group name is required (up to 60 characters)"));
+        return Err("Group name is required (up to 60 characters)".into());
     }
+    Ok(name.to_string())
+}
+
+fn validate_group(f: &GroupForm, default_order: i64) -> AppResult<(String, i64)> {
+    let name = validate_group_name(&f.name).map_err(AppError::bad_request)?;
     let order = match f.sort_order.trim() {
         "" => default_order,
         o => o.parse().map_err(|_| AppError::bad_request("Order must be a number"))?,
     };
-    Ok((name.to_string(), order))
+    Ok((name, order))
 }
 
 pub async fn create_group(State(st): State<AppState>, user: CurrentUser, Form(f): Form<GroupForm>) -> AppResult<Response> {

@@ -35,4 +35,5 @@ src/notify.rs   alert channels
 src/stats.rs    reads across raw and hourly data; src/retention.rs rolls up and prunes
 src/auth        passwords, rate limiting, OIDC, SSO settings
 src/web         axum handlers and SVG charts; HTML in templates/, CSS and JS in static/
+src/web/api.rs  JSON API under /api/v1 for API tokens; the Terraform provider (igorovh/terraform-provider-anpi) depends on it
 ```

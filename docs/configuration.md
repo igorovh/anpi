@@ -70,7 +70,7 @@ Monitors of IPv4-only sites and Discord alerts go through that gateway, so they 
 **2. Install anpi** with the systemd unit from the release archive:
 
 ```sh
-V=v0.2.2
+V=v0.3.0
 case $(dpkg --print-architecture) in amd64) T=x86_64-unknown-linux-musl;; arm64) T=aarch64-unknown-linux-musl;; esac
 cd /tmp
 curl -fLO https://github.com/igorovh/anpi/releases/download/$V/anpi-$V-$T.tar.gz

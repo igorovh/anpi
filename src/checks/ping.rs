@@ -19,21 +19,36 @@ pub async fn check(host: &str, family: IpFamily, timeout: Duration) -> CheckOutc
     };
     let client = match Client::new(&config) {
         Ok(c) => c,
-        Err(e) => return CheckOutcome::fail(format!("cannot open ICMP socket (needs CAP_NET_RAW or ping_group_range): {e}")),
+        Err(e) => {
+            return CheckOutcome::fail(format!(
+                "cannot open ICMP socket (needs CAP_NET_RAW or ping_group_range): {e}"
+            ));
+        }
     };
     let mut pinger = client.pinger(ip, PingIdentifier(rand::random())).await;
     pinger.timeout(timeout);
-    let base = CheckOutcome { remote_ip: Some(ip.to_string()), ..Default::default() };
+    let base = CheckOutcome {
+        remote_ip: Some(ip.to_string()),
+        ..Default::default()
+    };
     match pinger.ping(PingSequence(0), &[0u8; 56]).await {
         Ok((_, rtt)) => {
             let rtt_ms = rtt.as_secs_f64() * 1000.0;
             CheckOutcome {
                 ok: true,
                 message: format!("reply from {ip} in {rtt_ms:.1} ms"),
-                timings: Timings { dns_ms: Some(dns_ms), total_ms: Some(rtt_ms), ..Default::default() },
+                timings: Timings {
+                    dns_ms: Some(dns_ms),
+                    total_ms: Some(rtt_ms),
+                    ..Default::default()
+                },
                 ..base
             }
         }
-        Err(e) => CheckOutcome { ok: false, message: format!("ping {ip}: {e}"), ..base },
+        Err(e) => CheckOutcome {
+            ok: false,
+            message: format!("ping {ip}: {e}"),
+            ..base
+        },
     }
 }

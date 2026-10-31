@@ -35,7 +35,11 @@ impl Config {
     }
 
     pub fn from_map(env: &HashMap<String, String>) -> anyhow::Result<Self> {
-        let get = |k: &str| env.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let get = |k: &str| {
+            env.get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
 
         let bind = get("ANPI_BIND")
             .unwrap_or_else(|| "0.0.0.0:3000".into())
@@ -44,17 +48,23 @@ impl Config {
 
         let database_path = match get("ANPI_DATABASE") {
             Some(p) => PathBuf::from(p),
-            None => PathBuf::from(get("ANPI_DATA_DIR").unwrap_or_else(|| "./data".into())).join("anpi.db"),
+            None => PathBuf::from(get("ANPI_DATA_DIR").unwrap_or_else(|| "./data".into()))
+                .join("anpi.db"),
         };
 
         let base_url = get("ANPI_BASE_URL").map(|u| u.trim_end_matches('/').to_string());
         if let Some(u) = &base_url {
-            url::Url::parse(u).context("ANPI_BASE_URL must be a full URL, e.g. https://status.example.com")?;
+            url::Url::parse(u)
+                .context("ANPI_BASE_URL must be a full URL, e.g. https://status.example.com")?;
         }
 
         let trust_proxy = get("ANPI_TRUST_PROXY").is_some_and(|v| parse_bool(&v));
         let client_ip_header = get("ANPI_CLIENT_IP_HEADER")
-            .map(|h| http::HeaderName::try_from(h.as_str()).with_context(|| format!("ANPI_CLIENT_IP_HEADER {h:?} is not a valid header name")))
+            .map(|h| {
+                http::HeaderName::try_from(h.as_str()).with_context(|| {
+                    format!("ANPI_CLIENT_IP_HEADER {h:?} is not a valid header name")
+                })
+            })
             .transpose()?;
         let heartbeat_url = get("ANPI_HEARTBEAT_URL");
         if let Some(u) = &heartbeat_url {
@@ -66,7 +76,9 @@ impl Config {
             _ => bail!("set both ANPI_TLS_CERT and ANPI_TLS_KEY to serve HTTPS"),
         };
         let max_concurrent_checks = match get("ANPI_MAX_CONCURRENT_CHECKS") {
-            Some(v) => v.parse().context("ANPI_MAX_CONCURRENT_CHECKS must be a number")?,
+            Some(v) => v
+                .parse()
+                .context("ANPI_MAX_CONCURRENT_CHECKS must be a number")?,
             None => 64,
         };
 
@@ -77,23 +89,38 @@ impl Config {
                     bail!("ANPI_OIDC_CLIENT_ID is required when ANPI_OIDC_ISSUER is set");
                 };
                 if base_url.is_none() {
-                    bail!("ANPI_BASE_URL is required when OIDC is enabled (used for the redirect URL)");
+                    bail!(
+                        "ANPI_BASE_URL is required when OIDC is enabled (used for the redirect URL)"
+                    );
                 }
                 Some(OidcConfig {
                     issuer: issuer.trim_end_matches('/').to_string(),
                     client_id,
                     client_secret: get("ANPI_OIDC_CLIENT_SECRET"),
-                    scopes: get("ANPI_OIDC_SCOPES").unwrap_or_else(|| "openid profile email".into()),
+                    scopes: get("ANPI_OIDC_SCOPES")
+                        .unwrap_or_else(|| "openid profile email".into()),
                     required_role: get("ANPI_OIDC_REQUIRED_ROLE"),
                 })
             }
         };
 
-        Ok(Self { bind, database_path, base_url, trust_proxy, client_ip_header, tls, heartbeat_url, max_concurrent_checks, oidc })
+        Ok(Self {
+            bind,
+            database_path,
+            base_url,
+            trust_proxy,
+            client_ip_header,
+            tls,
+            heartbeat_url,
+            max_concurrent_checks,
+            oidc,
+        })
     }
 
     pub fn secure_cookies(&self) -> bool {
-        self.base_url.as_deref().is_some_and(|u| u.starts_with("https://"))
+        self.base_url
+            .as_deref()
+            .is_some_and(|u| u.starts_with("https://"))
     }
 
     pub fn sso_only(&self) -> bool {
@@ -101,7 +128,9 @@ impl Config {
     }
 
     pub fn oidc_redirect_url(&self) -> Option<String> {
-        self.base_url.as_ref().map(|b| format!("{b}/auth/oidc/callback"))
+        self.base_url
+            .as_ref()
+            .map(|b| format!("{b}/auth/oidc/callback"))
     }
 }
 
@@ -114,7 +143,10 @@ mod tests {
     use super::*;
 
     fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -129,7 +161,8 @@ mod tests {
 
     #[test]
     fn oidc_requires_client_id_and_base_url() {
-        let err = Config::from_map(&env(&[("ANPI_OIDC_ISSUER", "https://kc/realms/x")])).unwrap_err();
+        let err =
+            Config::from_map(&env(&[("ANPI_OIDC_ISSUER", "https://kc/realms/x")])).unwrap_err();
         assert!(err.to_string().contains("CLIENT_ID"));
 
         let err = Config::from_map(&env(&[
@@ -151,15 +184,31 @@ mod tests {
         assert!(c.sso_only());
         assert!(c.secure_cookies());
         assert_eq!(c.oidc.as_ref().unwrap().issuer, "https://kc/realms/x");
-        assert_eq!(c.oidc_redirect_url().unwrap(), "https://status.example.com/auth/oidc/callback");
+        assert_eq!(
+            c.oidc_redirect_url().unwrap(),
+            "https://status.example.com/auth/oidc/callback"
+        );
     }
 
     #[test]
     fn tls_needs_both_files_and_header_names_are_checked() {
-        let c = Config::from_map(&env(&[("ANPI_TLS_CERT", "/c.pem"), ("ANPI_TLS_KEY", "/k.pem"), ("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP")])).unwrap();
-        assert_eq!(c.tls, Some((PathBuf::from("/c.pem"), PathBuf::from("/k.pem"))));
+        let c = Config::from_map(&env(&[
+            ("ANPI_TLS_CERT", "/c.pem"),
+            ("ANPI_TLS_KEY", "/k.pem"),
+            ("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            c.tls,
+            Some((PathBuf::from("/c.pem"), PathBuf::from("/k.pem")))
+        );
         assert_eq!(c.client_ip_header.unwrap().as_str(), "cf-connecting-ip");
-        assert!(Config::from_map(&env(&[("ANPI_TLS_CERT", "/c.pem")])).unwrap_err().to_string().contains("both"));
+        assert!(
+            Config::from_map(&env(&[("ANPI_TLS_CERT", "/c.pem")]))
+                .unwrap_err()
+                .to_string()
+                .contains("both")
+        );
         assert!(Config::from_map(&env(&[("ANPI_CLIENT_IP_HEADER", "bad header")])).is_err());
     }
 

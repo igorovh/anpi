@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use super::admin::MonitorForm;
-use super::branding::{sniff_image, validate_site_name, MAX_LOGO_BYTES};
+use super::branding::{MAX_LOGO_BYTES, sniff_image, validate_site_name};
 use crate::app::LOGO_KEY;
 use crate::auth::sso::PanelSso;
 use crate::db::Db;
@@ -177,9 +177,20 @@ fn to_backup_monitor(m: &Monitor, channels: Vec<String>) -> BackupMonitor {
 pub async fn export(db: &Db) -> anyhow::Result<Backup> {
     let s = AppSettings::load(db).await?;
     let site_name = crate::app::Branding::load(db).await?.site_name;
-    let logo = store::assets::get(db, LOGO_KEY).await?.map(|a| BackupLogo { content_type: a.content_type, data: STANDARD.encode(a.data) });
+    let logo = store::assets::get(db, LOGO_KEY).await?.map(|a| BackupLogo {
+        content_type: a.content_type,
+        data: STANDARD.encode(a.data),
+    });
     let sso = PanelSso::load(db).await?;
-    let groups = store::groups::list(db).await?.into_iter().map(|g| BackupGroup { key: format!("g{}", g.id), name: g.name, sort_order: g.sort_order }).collect();
+    let groups = store::groups::list(db)
+        .await?
+        .into_iter()
+        .map(|g| BackupGroup {
+            key: format!("g{}", g.id),
+            name: g.name,
+            sort_order: g.sort_order,
+        })
+        .collect();
     let channels = store::notifications::list(db)
         .await?
         .into_iter()
@@ -194,7 +205,11 @@ pub async fn export(db: &Db) -> anyhow::Result<Backup> {
         .collect();
     let mut monitors = Vec::new();
     for m in store::monitors::list(db).await? {
-        let ch = store::monitors::channel_ids(db, m.id).await?.into_iter().map(|c| format!("c{c}")).collect();
+        let ch = store::monitors::channel_ids(db, m.id)
+            .await?
+            .into_iter()
+            .map(|c| format!("c{c}"))
+            .collect();
         monitors.push(to_backup_monitor(&m, ch));
     }
     let mut maintenance = Vec::new();
@@ -248,12 +263,26 @@ fn to_form(m: &BackupMonitor) -> MonitorForm {
     let is_dns = kind == Some(MonitorKind::Dns);
     let num = |v: Option<i64>| v.map(|n| n.to_string()).unwrap_or_default();
     let flag = |b: bool| b.then(|| "on".to_string());
-    let or = |v: &str, d: &str| if v.trim().is_empty() { d.to_string() } else { v.to_string() };
+    let or = |v: &str, d: &str| {
+        if v.trim().is_empty() {
+            d.to_string()
+        } else {
+            v.to_string()
+        }
+    };
     MonitorForm {
         name: m.name.clone(),
         kind: m.kind.clone(),
-        url: if uses_url { m.target.clone() } else { String::new() },
-        host: if uses_url { String::new() } else { m.target.clone() },
+        url: if uses_url {
+            m.target.clone()
+        } else {
+            String::new()
+        },
+        host: if uses_url {
+            String::new()
+        } else {
+            m.target.clone()
+        },
         port: num(m.port),
         method: or(&m.method, "GET"),
         headers: m.headers.clone(),
@@ -268,8 +297,16 @@ fn to_form(m: &BackupMonitor) -> MonitorForm {
         ignore_tls: flag(m.ignore_tls),
         content_kind: or(&m.content_kind, "none"),
         content_value: m.content_value.clone(),
-        content_expected: if is_dns { String::new() } else { m.content_expected.clone() },
-        dns_expected: if is_dns { m.content_expected.clone() } else { String::new() },
+        content_expected: if is_dns {
+            String::new()
+        } else {
+            m.content_expected.clone()
+        },
+        dns_expected: if is_dns {
+            m.content_expected.clone()
+        } else {
+            String::new()
+        },
         ssl_warn_days: num(m.ssl_warn_days),
         dns_record_type: or(&m.dns_record_type, "A"),
         dns_server: m.dns_server.clone(),
@@ -283,7 +320,12 @@ fn to_form(m: &BackupMonitor) -> MonitorForm {
 /// Wipes monitors (with their history), groups, channels and maintenance windows before a replace import.
 async fn clear(db: &Db) -> sqlx::Result<()> {
     let mut tx = db.begin().await?;
-    for sql in ["DELETE FROM maintenances", "DELETE FROM monitors", "DELETE FROM notification_channels", "DELETE FROM monitor_groups"] {
+    for sql in [
+        "DELETE FROM maintenances",
+        "DELETE FROM monitors",
+        "DELETE FROM notification_channels",
+        "DELETE FROM monitor_groups",
+    ] {
         sqlx::query(sql).execute(&mut *tx).await?;
     }
     tx.commit().await
@@ -293,9 +335,13 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
     if !is_backup(json) {
         return Err("This is not an anpi configuration export.".into());
     }
-    let b: Backup = serde_json::from_str(json).map_err(|e| format!("not a valid anpi backup: {e}"))?;
+    let b: Backup =
+        serde_json::from_str(json).map_err(|e| format!("not a valid anpi backup: {e}"))?;
     if b.anpi_export != FORMAT {
-        return Err(format!("unsupported backup format {} (this version reads {FORMAT})", b.anpi_export));
+        return Err(format!(
+            "unsupported backup format {} (this version reads {FORMAT})",
+            b.anpi_export
+        ));
     }
     let err = |e: sqlx::Error| e.to_string();
     let mut report = ImportReport::default();
@@ -307,16 +353,27 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
         let d = AppSettings::default();
         let clamp = |v: i64, lo: i64, hi: i64, def: i64| if v == 0 { def } else { v.clamp(lo, hi) };
         let settings = AppSettings {
-            status_title: if s.status_title.trim().is_empty() { d.status_title.clone() } else { s.status_title.chars().take(100).collect() },
+            status_title: if s.status_title.trim().is_empty() {
+                d.status_title.clone()
+            } else {
+                s.status_title.chars().take(100).collect()
+            },
             status_description: s.status_description.chars().take(1000).collect(),
             raw_retention_hours: clamp(s.raw_retention_hours, 1, 24 * 90, d.raw_retention_hours),
             hourly_retention_days: clamp(s.hourly_retention_days, 1, 3650, d.hourly_retention_days),
-            incident_retention_days: clamp(s.incident_retention_days, 1, 3650, d.incident_retention_days),
+            incident_retention_days: clamp(
+                s.incident_retention_days,
+                1,
+                3650,
+                d.incident_retention_days,
+            ),
             incidents_shown: s.incidents_shown.clamp(0, 50),
         };
         settings.save(db).await.map_err(err)?;
         if let Ok(name) = validate_site_name(&s.site_name) {
-            store::settings::set(db, "site_name", &name).await.map_err(err)?;
+            store::settings::set(db, "site_name", &name)
+                .await
+                .map_err(err)?;
         }
     }
 
@@ -324,11 +381,17 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
         match STANDARD.decode(logo.data.trim()) {
             Ok(data) if data.len() <= MAX_LOGO_BYTES => match sniff_image(&data) {
                 Some(ct) => {
-                    store::assets::put(db, LOGO_KEY, ct, &data).await.map_err(err)?;
+                    store::assets::put(db, LOGO_KEY, ct, &data)
+                        .await
+                        .map_err(err)?;
                 }
-                None => report.warnings.push("logo skipped: not a supported image".into()),
+                None => report
+                    .warnings
+                    .push("logo skipped: not a supported image".into()),
             },
-            _ => report.warnings.push("logo skipped: invalid or larger than 512 KB".into()),
+            _ => report
+                .warnings
+                .push("logo skipped: invalid or larger than 512 KB".into()),
         }
     }
 
@@ -356,11 +419,16 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
         if name.is_empty() {
             continue;
         }
-        let id = match existing_groups.iter().find(|x| x.name.eq_ignore_ascii_case(name)) {
+        let id = match existing_groups
+            .iter()
+            .find(|x| x.name.eq_ignore_ascii_case(name))
+        {
             Some(x) => x.id,
             None => {
                 report.groups_created += 1;
-                store::groups::create(db, &name.chars().take(60).collect::<String>(), g.sort_order).await.map_err(err)?
+                store::groups::create(db, &name.chars().take(60).collect::<String>(), g.sort_order)
+                    .await
+                    .map_err(err)?
             }
         };
         groups.insert(g.key.clone(), id);
@@ -370,14 +438,28 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
     let mut channels: HashMap<String, i64> = HashMap::new();
     for c in &b.channels {
         if let Err(e) = c.config.validate(&c.kind) {
-            report.skipped.push(format!("notification \"{}\": {e}", c.name));
+            report
+                .skipped
+                .push(format!("notification \"{}\": {e}", c.name));
             continue;
         }
-        let id = match existing_channels.iter().find(|x| x.name == c.name && x.kind == c.kind) {
+        let id = match existing_channels
+            .iter()
+            .find(|x| x.name == c.name && x.kind == c.kind)
+        {
             Some(x) => x.id,
             None => {
                 report.channels_created += 1;
-                store::notifications::create(db, c.name.trim(), &c.kind, &c.config.to_json(), c.active, c.is_default).await.map_err(err)?
+                store::notifications::create(
+                    db,
+                    c.name.trim(),
+                    &c.kind,
+                    &c.config.to_json(),
+                    c.active,
+                    c.is_default,
+                )
+                .await
+                .map_err(err)?
             }
         };
         channels.insert(c.key.clone(), id);
@@ -394,43 +476,104 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
         };
         input.group_id = m.group.as_ref().and_then(|g| groups.get(g).copied());
         let id = store::monitors::create(db, &input).await.map_err(err)?;
-        if let Some(token) = m.push_token.as_ref().filter(|t| !t.is_empty() && input.kind == "push") {
-            let taken = store::monitors::get_by_push_token(db, token).await.map_err(err)?.is_some();
+        if let Some(token) = m
+            .push_token
+            .as_ref()
+            .filter(|t| !t.is_empty() && input.kind == "push")
+        {
+            let taken = store::monitors::get_by_push_token(db, token)
+                .await
+                .map_err(err)?
+                .is_some();
             if taken {
-                report.warnings.push(format!("\"{}\": push token already in use, a new one was generated", m.name));
+                report.warnings.push(format!(
+                    "\"{}\": push token already in use, a new one was generated",
+                    m.name
+                ));
             } else {
-                sqlx::query("UPDATE monitors SET push_token = ? WHERE id = ?").bind(token).bind(id).execute(db).await.map_err(err)?;
+                sqlx::query("UPDATE monitors SET push_token = ? WHERE id = ?")
+                    .bind(token)
+                    .bind(id)
+                    .execute(db)
+                    .await
+                    .map_err(err)?;
             }
         }
-        let ids: Vec<i64> = m.channels.iter().filter_map(|c| channels.get(c).copied()).collect();
-        store::monitors::set_channels(db, id, &ids).await.map_err(err)?;
+        let ids: Vec<i64> = m
+            .channels
+            .iter()
+            .filter_map(|c| channels.get(c).copied())
+            .collect();
+        store::monitors::set_channels(db, id, &ids)
+            .await
+            .map_err(err)?;
         monitors.insert(m.key.clone(), id);
         report.monitors_created += 1;
     }
 
     // Nest only after every monitor exists, keeping the one-level rule.
-    let parents_in_file: HashMap<&str, bool> = b.monitors.iter().map(|m| (m.key.as_str(), m.parent.is_some())).collect();
+    let parents_in_file: HashMap<&str, bool> = b
+        .monitors
+        .iter()
+        .map(|m| (m.key.as_str(), m.parent.is_some()))
+        .collect();
     for m in &b.monitors {
-        let (Some(id), Some(parent_key)) = (monitors.get(&m.key), &m.parent) else { continue };
-        let Some(parent) = monitors.get(parent_key) else {
-            report.warnings.push(format!("\"{}\": its parent was not imported, so it stays at the top level", m.name));
+        let (Some(id), Some(parent_key)) = (monitors.get(&m.key), &m.parent) else {
             continue;
         };
-        if parents_in_file.get(parent_key.as_str()).copied().unwrap_or(false) {
-            report.warnings.push(format!("\"{}\": nested more than one level deep, kept at the top level", m.name));
+        let Some(parent) = monitors.get(parent_key) else {
+            report.warnings.push(format!(
+                "\"{}\": its parent was not imported, so it stays at the top level",
+                m.name
+            ));
+            continue;
+        };
+        if parents_in_file
+            .get(parent_key.as_str())
+            .copied()
+            .unwrap_or(false)
+        {
+            report.warnings.push(format!(
+                "\"{}\": nested more than one level deep, kept at the top level",
+                m.name
+            ));
             continue;
         }
-        let parent_group = store::monitors::get(db, *parent).await.map_err(err)?.and_then(|p| p.group_id);
-        store::monitors::move_to(db, *id, parent_group, Some(*parent)).await.map_err(err)?;
+        let parent_group = store::monitors::get(db, *parent)
+            .await
+            .map_err(err)?
+            .and_then(|p| p.group_id);
+        store::monitors::move_to(db, *id, parent_group, Some(*parent))
+            .await
+            .map_err(err)?;
     }
 
     for w in &b.maintenance {
-        let ids: Vec<i64> = w.monitors.iter().filter_map(|k| monitors.get(k).copied()).collect();
-        if w.ends_at <= w.starts_at || w.title.trim().is_empty() || (!w.all_monitors && ids.is_empty()) {
-            report.skipped.push(format!("maintenance \"{}\": no matching monitors or invalid times", w.title));
+        let ids: Vec<i64> = w
+            .monitors
+            .iter()
+            .filter_map(|k| monitors.get(k).copied())
+            .collect();
+        if w.ends_at <= w.starts_at
+            || w.title.trim().is_empty()
+            || (!w.all_monitors && ids.is_empty())
+        {
+            report.skipped.push(format!(
+                "maintenance \"{}\": no matching monitors or invalid times",
+                w.title
+            ));
             continue;
         }
-        store::maintenance::create(db, w.title.trim(), w.starts_at, w.ends_at, w.all_monitors, &ids).await.map_err(err)?;
+        store::maintenance::create(
+            db,
+            w.title.trim(),
+            w.starts_at,
+            w.ends_at,
+            w.all_monitors,
+            &ids,
+        )
+        .await
+        .map_err(err)?;
     }
     Ok(report)
 }
@@ -442,11 +585,33 @@ mod tests {
     async fn seeded() -> Db {
         let db = crate::db::open_memory().await.unwrap();
         crate::demo::seed(&db).await.unwrap();
-        let cfg = ChannelConfig { webhook_url: "https://discord.com/api/webhooks/1/x".into(), ..Default::default() };
-        let ch = store::notifications::create(&db, "Discord", "discord", &cfg.to_json(), true, false).await.unwrap();
-        let web = store::monitors::list(&db).await.unwrap().into_iter().find(|m| m.name == "Website").unwrap();
-        store::monitors::set_channels(&db, web.id, &[ch]).await.unwrap();
-        store::maintenance::create(&db, "Upgrade", now_ms(), now_ms() + 3_600_000, false, &[web.id]).await.unwrap();
+        let cfg = ChannelConfig {
+            webhook_url: "https://discord.com/api/webhooks/1/x".into(),
+            ..Default::default()
+        };
+        let ch =
+            store::notifications::create(&db, "Discord", "discord", &cfg.to_json(), true, false)
+                .await
+                .unwrap();
+        let web = store::monitors::list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.name == "Website")
+            .unwrap();
+        store::monitors::set_channels(&db, web.id, &[ch])
+            .await
+            .unwrap();
+        store::maintenance::create(
+            &db,
+            "Upgrade",
+            now_ms(),
+            now_ms() + 3_600_000,
+            false,
+            &[web.id],
+        )
+        .await
+        .unwrap();
         db
     }
 
@@ -459,7 +624,11 @@ mod tests {
 
         let dst = crate::db::open_memory().await.unwrap();
         let r = import(&dst, &json, false).await.unwrap();
-        assert_eq!((r.monitors_created, r.groups_created, r.channels_created), (9, 2, 1), "{r:?}");
+        assert_eq!(
+            (r.monitors_created, r.groups_created, r.channels_created),
+            (9, 2, 1),
+            "{r:?}"
+        );
         assert!(r.skipped.is_empty(), "{:?}", r.skipped);
 
         let a = store::monitors::list(&src).await.unwrap();
@@ -468,21 +637,55 @@ mod tests {
             let mut v: Vec<_> = ms
                 .iter()
                 .map(|m| {
-                    let parent = m.parent_id.and_then(|p| ms.iter().find(|x| x.id == p)).map(|p| p.name.clone());
-                    (m.name.clone(), m.kind.clone(), m.target.clone(), m.content_kind.clone(), m.public, parent, m.interval_s)
+                    let parent = m
+                        .parent_id
+                        .and_then(|p| ms.iter().find(|x| x.id == p))
+                        .map(|p| p.name.clone());
+                    (
+                        m.name.clone(),
+                        m.kind.clone(),
+                        m.target.clone(),
+                        m.content_kind.clone(),
+                        m.public,
+                        parent,
+                        m.interval_s,
+                    )
                 })
                 .collect();
             v.sort();
             v
         };
-        assert_eq!(shape(&a), shape(&b), "monitors, sub-monitors and settings survive the round trip");
-        let push_a = a.iter().find(|m| m.kind == "push").unwrap().push_token.clone();
-        let push_b = b.iter().find(|m| m.kind == "push").unwrap().push_token.clone();
+        assert_eq!(
+            shape(&a),
+            shape(&b),
+            "monitors, sub-monitors and settings survive the round trip"
+        );
+        let push_a = a
+            .iter()
+            .find(|m| m.kind == "push")
+            .unwrap()
+            .push_token
+            .clone();
+        let push_b = b
+            .iter()
+            .find(|m| m.kind == "push")
+            .unwrap()
+            .push_token
+            .clone();
         assert_eq!(push_a, push_b, "cron jobs keep working after a move");
         let web = b.iter().find(|m| m.name == "Website").unwrap();
-        assert_eq!(store::monitors::channel_ids(&dst, web.id).await.unwrap().len(), 1);
+        assert_eq!(
+            store::monitors::channel_ids(&dst, web.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(store::maintenance::list(&dst).await.unwrap().len(), 1);
-        assert_eq!(AppSettings::load(&dst).await.unwrap().status_title, "Example status");
+        assert_eq!(
+            AppSettings::load(&dst).await.unwrap().status_title,
+            "Example status"
+        );
     }
 
     #[tokio::test]
@@ -492,31 +695,87 @@ mod tests {
         let r = import(&db, &json, false).await.unwrap();
         assert_eq!(r.groups_created, 0, "groups with the same name are reused");
         assert_eq!(store::monitors::list(&db).await.unwrap().len(), 18);
-        assert!(r.warnings.iter().any(|w| w.contains("push token already in use")));
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("push token already in use"))
+        );
 
         let r = import(&db, &json, true).await.unwrap();
         assert_eq!(r.monitors_created, 9);
-        assert_eq!(store::monitors::list(&db).await.unwrap().len(), 9, "replace removes what was there");
+        assert_eq!(
+            store::monitors::list(&db).await.unwrap().len(),
+            9,
+            "replace removes what was there"
+        );
         assert_eq!(store::groups::list(&db).await.unwrap().len(), 2);
     }
 
     #[tokio::test]
     async fn bad_entries_are_reported_and_sso_is_never_switched_on() {
         let db = crate::db::open_memory().await.unwrap();
-        let mut b = Backup { anpi_export: FORMAT, ..Default::default() };
-        b.monitors.push(BackupMonitor { key: "m1".into(), name: "ok".into(), kind: "http".into(), target: "https://example.com".into(), ..Default::default() });
-        b.monitors.push(BackupMonitor { key: "m2".into(), name: "broken".into(), kind: "http".into(), target: "not a url".into(), ..Default::default() });
-        b.monitors.push(BackupMonitor { key: "m3".into(), name: "orphan".into(), kind: "tcp".into(), target: "h".into(), port: Some(1), parent: Some("m9".into()), ..Default::default() });
-        b.channels.push(BackupChannel { key: "c1".into(), name: "empty".into(), kind: "discord".into(), ..Default::default() });
-        b.sso = Some(BackupSso { enabled: true, base_url: "https://s".into(), issuer: "https://kc/realms/r".into(), client_id: "anpi".into(), ..Default::default() });
-        let r = import(&db, &serde_json::to_string(&b).unwrap(), false).await.unwrap();
+        let mut b = Backup {
+            anpi_export: FORMAT,
+            ..Default::default()
+        };
+        b.monitors.push(BackupMonitor {
+            key: "m1".into(),
+            name: "ok".into(),
+            kind: "http".into(),
+            target: "https://example.com".into(),
+            ..Default::default()
+        });
+        b.monitors.push(BackupMonitor {
+            key: "m2".into(),
+            name: "broken".into(),
+            kind: "http".into(),
+            target: "not a url".into(),
+            ..Default::default()
+        });
+        b.monitors.push(BackupMonitor {
+            key: "m3".into(),
+            name: "orphan".into(),
+            kind: "tcp".into(),
+            target: "h".into(),
+            port: Some(1),
+            parent: Some("m9".into()),
+            ..Default::default()
+        });
+        b.channels.push(BackupChannel {
+            key: "c1".into(),
+            name: "empty".into(),
+            kind: "discord".into(),
+            ..Default::default()
+        });
+        b.sso = Some(BackupSso {
+            enabled: true,
+            base_url: "https://s".into(),
+            issuer: "https://kc/realms/r".into(),
+            client_id: "anpi".into(),
+            ..Default::default()
+        });
+        let r = import(&db, &serde_json::to_string(&b).unwrap(), false)
+            .await
+            .unwrap();
         assert_eq!(r.monitors_created, 2);
-        assert!(r.skipped.iter().any(|s| s.contains("broken") && s.contains("URL")));
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.contains("broken") && s.contains("URL"))
+        );
         assert!(r.skipped.iter().any(|s| s.contains("empty")));
         assert!(r.warnings.iter().any(|w| w.contains("orphan")));
-        assert!(!PanelSso::load(&db).await.unwrap().enabled, "imported SSO stays off");
+        assert!(
+            !PanelSso::load(&db).await.unwrap().enabled,
+            "imported SSO stays off"
+        );
 
-        assert!(import(&db, r#"{"anpi_export": 99}"#, false).await.unwrap_err().contains("unsupported"));
+        assert!(
+            import(&db, r#"{"anpi_export": 99}"#, false)
+                .await
+                .unwrap_err()
+                .contains("unsupported")
+        );
         assert!(import(&db, "nope", false).await.is_err());
     }
 }

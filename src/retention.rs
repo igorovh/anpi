@@ -23,7 +23,9 @@ pub async fn run_once(db: &Db, now: i64, s: &AppSettings) -> sqlx::Result<Report
     let target = floor_hour(now - 2 * 60_000);
     let mut cut = agg_until(db).await?;
     if cut == 0 {
-        let oldest: Option<i64> = sqlx::query_scalar("SELECT MIN(ts) FROM heartbeats").fetch_one(db).await?;
+        let oldest: Option<i64> = sqlx::query_scalar("SELECT MIN(ts) FROM heartbeats")
+            .fetch_one(db)
+            .await?;
         cut = oldest.map(floor_hour).unwrap_or(target);
     }
     if target > cut {
@@ -73,15 +75,25 @@ pub async fn run_once(db: &Db, now: i64, s: &AppSettings) -> sqlx::Result<Report
         .await?
         .rows_affected();
     let incident_cut = now - s.incident_retention_days.max(1) * DAY_MS;
-    report.incidents_deleted = sqlx::query("DELETE FROM incidents WHERE ended_at IS NOT NULL AND ended_at < ?")
+    report.incidents_deleted =
+        sqlx::query("DELETE FROM incidents WHERE ended_at IS NOT NULL AND ended_at < ?")
+            .bind(incident_cut)
+            .execute(db)
+            .await?
+            .rows_affected();
+    sqlx::query("DELETE FROM maintenances WHERE ends_at < ?")
         .bind(incident_cut)
         .execute(db)
-        .await?
-        .rows_affected();
-    sqlx::query("DELETE FROM maintenances WHERE ends_at < ?").bind(incident_cut).execute(db).await?;
-    sqlx::query("DELETE FROM sessions WHERE expires_at < ?").bind(now).execute(db).await?;
+        .await?;
+    sqlx::query("DELETE FROM sessions WHERE expires_at < ?")
+        .bind(now)
+        .execute(db)
+        .await?;
     // Keep the first row: it marks the install, which bounds report coverage.
-    sqlx::query("DELETE FROM runtime WHERE last_seen < ? AND id <> (SELECT MIN(id) FROM runtime)").bind(incident_cut).execute(db).await?;
+    sqlx::query("DELETE FROM runtime WHERE last_seen < ? AND id <> (SELECT MIN(id) FROM runtime)")
+        .bind(incident_cut)
+        .execute(db)
+        .await?;
     if report.raw_deleted + report.hourly_deleted > 0 {
         sqlx::query("PRAGMA incremental_vacuum").execute(db).await?;
     }
@@ -100,7 +112,9 @@ pub fn spawn(ctx: Arc<Ctx>) {
             }
             .await;
             match result {
-                Ok(r) if r.raw_deleted + r.hourly_deleted + r.incidents_deleted > 0 => tracing::info!(?r, "retention"),
+                Ok(r) if r.raw_deleted + r.hourly_deleted + r.incidents_deleted > 0 => {
+                    tracing::info!(?r, "retention")
+                }
                 Ok(_) => {}
                 Err(e) => tracing::error!(error = %e, "retention job failed"),
             }

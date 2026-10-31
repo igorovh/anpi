@@ -27,19 +27,36 @@ struct Spec {
 }
 
 fn http(name: &str, url: &str) -> MonitorInput {
-    MonitorInput { public: true, ..MonitorInput::http(name, url) }
+    MonitorInput {
+        public: true,
+        ..MonitorInput::http(name, url)
+    }
 }
 
 fn specs(product: i64, infra: i64) -> Vec<Spec> {
-    let leaf = |input: MonitorInput, base_ms: f64, flaky: f64| Spec { input, base_ms, flaky, children: vec![] };
+    let leaf = |input: MonitorInput, base_ms: f64, flaky: f64| Spec {
+        input,
+        base_ms,
+        flaky,
+        children: vec![],
+    };
     vec![
         leaf(
-            MonitorInput { group_id: Some(product), content_kind: "contains".into(), content_value: "Example Domain".into(), ..http("Website", "https://example.com/") },
+            MonitorInput {
+                group_id: Some(product),
+                content_kind: "contains".into(),
+                content_value: "Example Domain".into(),
+                ..http("Website", "https://example.com/")
+            },
             140.0,
             0.002,
         ),
         Spec {
-            input: MonitorInput { kind: "aggregate".into(), group_id: Some(product), ..http("API", "") },
+            input: MonitorInput {
+                kind: "aggregate".into(),
+                group_id: Some(product),
+                ..http("API", "")
+            },
             base_ms: 0.0,
             flaky: 0.0,
             children: vec![
@@ -49,26 +66,52 @@ fn specs(product: i64, infra: i64) -> Vec<Spec> {
                         content_kind: "json_path".into(),
                         content_value: "$.status.indicator".into(),
                         public_name: "Status".into(),
-                        ..http("Status endpoint", "https://www.githubstatus.com/api/v2/status.json")
+                        ..http(
+                            "Status endpoint",
+                            "https://www.githubstatus.com/api/v2/status.json",
+                        )
                     },
                     190.0,
                     0.004,
                 ),
                 leaf(
-                    MonitorInput { group_id: Some(product), content_kind: "contains".into(), content_value: "DuckDuckGo".into(), ..http("Search", "https://duckduckgo.com/") },
+                    MonitorInput {
+                        group_id: Some(product),
+                        content_kind: "contains".into(),
+                        content_value: "DuckDuckGo".into(),
+                        ..http("Search", "https://duckduckgo.com/")
+                    },
                     120.0,
                     0.006,
                 ),
                 leaf(
-                    MonitorInput { kind: "websocket".into(), group_id: Some(product), ..http("Realtime", "wss://echo.websocket.org/") },
+                    MonitorInput {
+                        kind: "websocket".into(),
+                        group_id: Some(product),
+                        ..http("Realtime", "wss://echo.websocket.org/")
+                    },
                     230.0,
                     0.01,
                 ),
             ],
         },
-        leaf(MonitorInput { group_id: Some(product), ..http("Checkout", "https://httpbin.org/status/503") }, 420.0, 1.0),
         leaf(
-            MonitorInput { kind: "tcp".into(), target: "1.1.1.1".into(), port: Some(53), ip_family: "v4".into(), group_id: Some(infra), ..http("Cloudflare DNS", "") },
+            MonitorInput {
+                group_id: Some(product),
+                ..http("Checkout", "https://httpbin.org/status/503")
+            },
+            420.0,
+            1.0,
+        ),
+        leaf(
+            MonitorInput {
+                kind: "tcp".into(),
+                target: "1.1.1.1".into(),
+                port: Some(53),
+                ip_family: "v4".into(),
+                group_id: Some(infra),
+                ..http("Cloudflare DNS", "")
+            },
             15.0,
             0.0,
         ),
@@ -84,19 +127,44 @@ fn specs(product: i64, infra: i64) -> Vec<Spec> {
             25.0,
             0.0,
         ),
-        leaf(MonitorInput { kind: "push".into(), interval_s: 86_400, group_id: Some(infra), public: false, ..http("Nightly backup", "") }, 0.0, 0.0),
+        leaf(
+            MonitorInput {
+                kind: "push".into(),
+                interval_s: 86_400,
+                group_id: Some(infra),
+                public: false,
+                ..http("Nightly backup", "")
+            },
+            0.0,
+            0.0,
+        ),
     ]
 }
 
-async fn history(db: &Db, id: i64, s: &Spec, rng: &mut Rng, now: i64, cut: i64) -> anyhow::Result<()> {
+async fn history(
+    db: &Db,
+    id: i64,
+    s: &Spec,
+    rng: &mut Rng,
+    now: i64,
+    cut: i64,
+) -> anyhow::Result<()> {
     let http_like = matches!(s.input.kind.as_str(), "http" | "websocket");
     let mut outages = Vec::new();
     if s.flaky >= 0.004 && s.flaky < 1.0 {
         let start = floor_hour(now - ((3.0 + rng.next() * 25.0) as i64) * DAY_MS);
         let minutes = 4 + (rng.next() * 36.0) as i64;
         outages.push(start);
-        store::heartbeats::create_incident(db, id, start + 7 * 60_000, "HTTP 502 Bad Gateway (expected 200-299)").await?;
-        let inc: i64 = sqlx::query_scalar("SELECT MAX(id) FROM incidents").fetch_one(db).await?;
+        store::heartbeats::create_incident(
+            db,
+            id,
+            start + 7 * 60_000,
+            "HTTP 502 Bad Gateway (expected 200-299)",
+        )
+        .await?;
+        let inc: i64 = sqlx::query_scalar("SELECT MAX(id) FROM incidents")
+            .fetch_one(db)
+            .await?;
         store::heartbeats::close_incident(db, inc, start + 7 * 60_000 + minutes * 60_000).await?;
     }
     let mut tx = db.begin().await?;
@@ -152,7 +220,11 @@ async fn history(db: &Db, id: i64, s: &Spec, rng: &mut Rng, now: i64, cut: i64) 
                 total_ms: Some(lat),
             },
             remote_ip: Some("93.184.215.14".into()),
-            message: if failing { "HTTP 503 Service Unavailable (expected 200-299)".into() } else { "200 OK".into() },
+            message: if failing {
+                "HTTP 503 Service Unavailable (expected 200-299)".into()
+            } else {
+                "200 OK".into()
+            },
             cert_expires_at: http_like.then_some(now + 64 * DAY_MS),
         });
         ts += 120_000;
@@ -163,7 +235,10 @@ async fn history(db: &Db, id: i64, s: &Spec, rng: &mut Rng, now: i64, cut: i64) 
 
 /// Seeds an empty database; refuses to touch one that already has monitors.
 pub async fn seed(db: &Db) -> anyhow::Result<usize> {
-    anyhow::ensure!(store::monitors::list(db).await?.is_empty(), "this database already has monitors; point ANPI_DATA_DIR at an empty directory");
+    anyhow::ensure!(
+        store::monitors::list(db).await?.is_empty(),
+        "this database already has monitors; point ANPI_DATA_DIR at an empty directory"
+    );
     let now = now_ms();
     let cut = floor_hour(now - DAY_MS);
     let product = store::groups::create(db, "Product", 10).await?;
@@ -177,7 +252,10 @@ pub async fn seed(db: &Db) -> anyhow::Result<usize> {
             history(db, id, &spec, &mut rng, now, cut).await?;
         }
         for child in &spec.children {
-            let child_input = MonitorInput { parent_id: Some(id), ..child.input.clone() };
+            let child_input = MonitorInput {
+                parent_id: Some(id),
+                ..child.input.clone()
+            };
             let cid = store::monitors::create(db, &child_input).await?;
             created += 1;
             history(db, cid, child, &mut rng, now, cut).await?;
@@ -199,10 +277,24 @@ mod tests {
         assert_eq!(n, 9);
         let monitors = store::monitors::list(&db).await.unwrap();
         let api = monitors.iter().find(|m| m.name == "API").unwrap();
-        assert_eq!(monitors.iter().filter(|m| m.parent_id == Some(api.id)).count(), 3);
-        let up = crate::stats::uptime_all(&db, now_ms() - 30 * DAY_MS).await.unwrap();
+        assert_eq!(
+            monitors
+                .iter()
+                .filter(|m| m.parent_id == Some(api.id))
+                .count(),
+            3
+        );
+        let up = crate::stats::uptime_all(&db, now_ms() - 30 * DAY_MS)
+            .await
+            .unwrap();
         let website = monitors.iter().find(|m| m.name == "Website").unwrap();
-        assert!(up[&website.id] > 99.0 && up[&website.id] < 100.0, "history spans raw and hourly data");
-        assert!(seed(&db).await.is_err(), "never overwrites an existing setup");
+        assert!(
+            up[&website.id] > 99.0 && up[&website.id] < 100.0,
+            "history spans raw and hourly data"
+        );
+        assert!(
+            seed(&db).await.is_err(),
+            "never overwrites an existing setup"
+        );
     }
 }

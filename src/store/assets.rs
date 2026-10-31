@@ -9,12 +9,22 @@ pub struct Asset {
 
 pub async fn get(db: &Db, key: &str) -> sqlx::Result<Option<Asset>> {
     let row: Option<(String, Vec<u8>, i64)> =
-        sqlx::query_as("SELECT content_type, data, updated_at FROM assets WHERE key = ?").bind(key).fetch_optional(db).await?;
-    Ok(row.map(|(content_type, data, updated_at)| Asset { content_type, data, updated_at }))
+        sqlx::query_as("SELECT content_type, data, updated_at FROM assets WHERE key = ?")
+            .bind(key)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.map(|(content_type, data, updated_at)| Asset {
+        content_type,
+        data,
+        updated_at,
+    }))
 }
 
 pub async fn version(db: &Db, key: &str) -> sqlx::Result<Option<i64>> {
-    sqlx::query_scalar("SELECT updated_at FROM assets WHERE key = ?").bind(key).fetch_optional(db).await
+    sqlx::query_scalar("SELECT updated_at FROM assets WHERE key = ?")
+        .bind(key)
+        .fetch_optional(db)
+        .await
 }
 
 pub async fn put(db: &Db, key: &str, content_type: &str, data: &[u8]) -> sqlx::Result<i64> {
@@ -33,6 +43,9 @@ pub async fn put(db: &Db, key: &str, content_type: &str, data: &[u8]) -> sqlx::R
 }
 
 pub async fn delete(db: &Db, key: &str) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM assets WHERE key = ?").bind(key).execute(db).await?;
+    sqlx::query("DELETE FROM assets WHERE key = ?")
+        .bind(key)
+        .execute(db)
+        .await?;
     Ok(())
 }

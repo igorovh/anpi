@@ -16,23 +16,43 @@ pub struct MonitorState {
 
 impl MonitorState {
     pub fn new() -> Self {
-        Self { last: None, consecutive_failures: 0 }
+        Self {
+            last: None,
+            consecutive_failures: 0,
+        }
     }
 
     /// Rebuilds state after a restart from the newest heartbeats (newest first).
     pub fn restore(newest_first: &[Status]) -> Self {
-        let Some(&last) = newest_first.first() else { return Self::new() };
+        let Some(&last) = newest_first.first() else {
+            return Self::new();
+        };
         let failures = match last {
-            Status::Pending => newest_first.iter().take_while(|s| **s == Status::Pending).count() as u32,
+            Status::Pending => newest_first
+                .iter()
+                .take_while(|s| **s == Status::Pending)
+                .count() as u32,
             _ => 0,
         };
         // A monitor stuck in Pending was Up before the failures started.
-        let last = if last == Status::Pending { Status::Up } else { last };
-        Self { last: Some(last), consecutive_failures: failures }
+        let last = if last == Status::Pending {
+            Status::Up
+        } else {
+            last
+        };
+        Self {
+            last: Some(last),
+            consecutive_failures: failures,
+        }
     }
 
     /// `threshold` is the number of consecutive failures that marks a monitor Down.
-    pub fn apply(&mut self, ok: bool, threshold: u32, in_maintenance: bool) -> (Status, Transition) {
+    pub fn apply(
+        &mut self,
+        ok: bool,
+        threshold: u32,
+        in_maintenance: bool,
+    ) -> (Status, Transition) {
         let threshold = threshold.max(1);
         if in_maintenance {
             self.consecutive_failures = 0;
@@ -41,7 +61,11 @@ impl MonitorState {
         }
         if ok {
             self.consecutive_failures = 0;
-            let transition = if self.last == Some(Status::Down) { Transition::Recovered } else { Transition::None };
+            let transition = if self.last == Some(Status::Down) {
+                Transition::Recovered
+            } else {
+                Transition::None
+            };
             self.last = Some(Status::Up);
             return (Status::Up, transition);
         }
@@ -71,14 +95,26 @@ mod tests {
     use Transition as T;
 
     fn run(state: &mut MonitorState, threshold: u32, checks: &[bool]) -> Vec<(Status, Transition)> {
-        checks.iter().map(|ok| state.apply(*ok, threshold, false)).collect()
+        checks
+            .iter()
+            .map(|ok| state.apply(*ok, threshold, false))
+            .collect()
     }
 
     #[test]
     fn down_only_after_threshold_consecutive_failures() {
         let mut s = MonitorState::new();
         let r = run(&mut s, 3, &[true, false, false, false, false]);
-        assert_eq!(r, vec![(Up, T::None), (Pending, T::None), (Pending, T::None), (Down, T::WentDown), (Down, T::None)]);
+        assert_eq!(
+            r,
+            vec![
+                (Up, T::None),
+                (Pending, T::None),
+                (Pending, T::None),
+                (Down, T::WentDown),
+                (Down, T::None)
+            ]
+        );
     }
 
     #[test]
@@ -102,7 +138,11 @@ mod tests {
         let mut s = MonitorState::new();
         assert_eq!(s.apply(false, 1, false), (Down, T::WentDown));
         let mut s = MonitorState::new();
-        assert_eq!(s.apply(false, 0, false), (Down, T::WentDown), "zero is treated as one");
+        assert_eq!(
+            s.apply(false, 0, false),
+            (Down, T::WentDown),
+            "zero is treated as one"
+        );
     }
 
     #[test]
@@ -119,18 +159,29 @@ mod tests {
     fn down_during_maintenance_end_is_reported_after_threshold() {
         let mut s = MonitorState::new();
         s.apply(false, 2, true);
-        assert_eq!(run(&mut s, 2, &[false, false]), vec![(Pending, T::None), (Down, T::WentDown)]);
+        assert_eq!(
+            run(&mut s, 2, &[false, false]),
+            vec![(Pending, T::None), (Down, T::WentDown)]
+        );
     }
 
     #[test]
     fn restore_after_restart_avoids_duplicate_alerts() {
         let mut s = MonitorState::restore(&[Down, Down, Up]);
-        assert_eq!(s.apply(false, 3, false), (Down, T::None), "already-down monitor must not re-alert");
+        assert_eq!(
+            s.apply(false, 3, false),
+            (Down, T::None),
+            "already-down monitor must not re-alert"
+        );
         assert_eq!(s.apply(true, 3, false), (Up, T::Recovered));
 
         let mut s = MonitorState::restore(&[Pending, Pending, Up]);
         assert_eq!(s.consecutive_failures, 2);
-        assert_eq!(s.apply(false, 3, false), (Down, T::WentDown), "pending streak continues across restarts");
+        assert_eq!(
+            s.apply(false, 3, false),
+            (Down, T::WentDown),
+            "pending streak continues across restarts"
+        );
 
         assert_eq!(MonitorState::restore(&[]), MonitorState::new());
     }

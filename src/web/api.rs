@@ -34,7 +34,10 @@ impl ApiError {
     }
 
     fn unauthorized() -> Self {
-        Self(StatusCode::UNAUTHORIZED, "Missing or invalid API token. Send it as: Authorization: Bearer anpi_…".into())
+        Self(
+            StatusCode::UNAUTHORIZED,
+            "Missing or invalid API token. Send it as: Authorization: Bearer anpi_…".into(),
+        )
     }
 }
 
@@ -49,7 +52,8 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut resp = (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response();
         if self.0 == StatusCode::UNAUTHORIZED {
-            resp.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            resp.headers_mut()
+                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         }
         resp
     }
@@ -63,36 +67,146 @@ pub struct ApiAuth(pub ApiToken);
 impl FromRequestParts<AppState> for ApiAuth {
     type Rejection = ApiError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let value = parts.headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).unwrap_or_default();
-        let token = value.split_once(' ').filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let value = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        let token = value
+            .split_once(' ')
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .map(|(_, t)| t.trim());
         match token {
-            Some(t) => store::api_tokens::verify(state.db(), t).await?.map(Self).ok_or_else(ApiError::unauthorized),
+            Some(t) => store::api_tokens::verify(state.db(), t)
+                .await?
+                .map(Self)
+                .ok_or_else(ApiError::unauthorized),
             None => Err(ApiError::unauthorized()),
         }
     }
 }
 
 fn body<T>(payload: Result<Json<T>, JsonRejection>) -> ApiResult<T> {
-    payload.map(|Json(v)| v).map_err(|e| ApiError::bad_request(e.body_text()))
+    payload
+        .map(|Json(v)| v)
+        .map_err(|e| ApiError::bad_request(e.body_text()))
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/info", get(info))
+        .route("/sso", get(get_sso).put(put_sso).delete(delete_sso))
         .route("/monitors", get(list_monitors).post(create_monitor))
-        .route("/monitors/{id}", get(get_monitor).put(update_monitor).delete(delete_monitor))
+        .route(
+            "/monitors/{id}",
+            get(get_monitor).put(update_monitor).delete(delete_monitor),
+        )
         .route("/groups", get(list_groups).post(create_group))
-        .route("/groups/{id}", get(get_group).put(update_group).delete(delete_group))
-        .route("/notification-channels", get(list_channels).post(create_channel))
-        .route("/notification-channels/{id}", get(get_channel).put(update_channel).delete(delete_channel))
-        .route("/maintenances", get(list_maintenances).post(create_maintenance))
-        .route("/maintenances/{id}", get(get_maintenance).put(update_maintenance).delete(delete_maintenance))
+        .route(
+            "/groups/{id}",
+            get(get_group).put(update_group).delete(delete_group),
+        )
+        .route(
+            "/notification-channels",
+            get(list_channels).post(create_channel),
+        )
+        .route(
+            "/notification-channels/{id}",
+            get(get_channel).put(update_channel).delete(delete_channel),
+        )
+        .route(
+            "/maintenances",
+            get(list_maintenances).post(create_maintenance),
+        )
+        .route(
+            "/maintenances/{id}",
+            get(get_maintenance)
+                .put(update_maintenance)
+                .delete(delete_maintenance),
+        )
         .fallback(|| async { ApiError::not_found() })
 }
 
 async fn info(ApiAuth(t): ApiAuth) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "token": t.name }))
+}
+
+fn require_sso(token: &ApiToken) -> ApiResult<()> {
+    if token.allow_sso {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "This token does not have the sso permission".into(),
+        ))
+    }
+}
+
+async fn get_sso(State(st): State<AppState>, ApiAuth(token): ApiAuth) -> ApiResult<Response> {
+    require_sso(&token)?;
+    let mut panel = crate::auth::sso::PanelSso::load(st.db()).await?;
+    let source = if let Some(cfg) = &st.ctx.config.oidc {
+        panel.enabled = true;
+        panel.base_url = st.ctx.config.base_url.clone().unwrap_or_default();
+        panel.issuer = cfg.issuer.clone();
+        panel.client_id = cfg.client_id.clone();
+        panel.client_secret = cfg.client_secret.clone().unwrap_or_default();
+        panel.required_role = cfg.required_role.clone().unwrap_or_default();
+        panel.scopes = cfg.scopes.clone();
+        "env"
+    } else if panel.enabled {
+        "panel"
+    } else {
+        "off"
+    };
+    let mut value = serde_json::to_value(panel)?;
+    value["source"] = source.into();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response())
+}
+
+async fn put_sso(
+    State(st): State<AppState>,
+    ApiAuth(token): ApiAuth,
+    payload: Result<Json<crate::auth::sso::PanelSso>, JsonRejection>,
+) -> ApiResult<Response> {
+    require_sso(&token)?;
+    if st.ctx.config.oidc.is_some() {
+        return Err(ApiError::bad_request(
+            "SSO is configured through ANPI_OIDC_* environment variables",
+        ));
+    }
+    let input = body(payload)?;
+    let secret = input.client_secret.trim().to_string();
+    let mut panel = super::settings::SsoForm::from_panel(input)
+        .apply(crate::auth::sso::PanelSso::load(st.db()).await?)
+        .map_err(ApiError::bad_request)?;
+    panel.client_secret = secret;
+    if panel.enabled {
+        super::settings::probe(&panel).await.map_err(|e| {
+            ApiError::bad_request(format!(
+                "SSO was not enabled because the identity provider could not be reached: {e}"
+            ))
+        })?;
+    }
+    panel.save(st.db()).await?;
+    st.ctx.reload_auth().await?;
+    get_sso(State(st), ApiAuth(token)).await
+}
+
+async fn delete_sso(State(st): State<AppState>, ApiAuth(token): ApiAuth) -> ApiResult<StatusCode> {
+    require_sso(&token)?;
+    if st.ctx.config.oidc.is_some() {
+        return Err(ApiError::bad_request(
+            "SSO is configured through ANPI_OIDC_* environment variables",
+        ));
+    }
+    crate::auth::sso::disable(st.db()).await?;
+    st.ctx.reload_auth().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---- Monitors ----
@@ -144,8 +258,16 @@ impl MonitorBody {
             csrf: String::new(),
             name: self.name.clone(),
             kind: self.kind.clone(),
-            url: if uses_url { self.target.clone() } else { String::new() },
-            host: if uses_url { String::new() } else { self.target.clone() },
+            url: if uses_url {
+                self.target.clone()
+            } else {
+                String::new()
+            },
+            host: if uses_url {
+                String::new()
+            } else {
+                self.target.clone()
+            },
             port: num(self.port),
             method: text(&self.method, "GET"),
             headers: self.headers.clone(),
@@ -245,14 +367,22 @@ async fn monitor_out(st: &AppState, m: Monitor) -> ApiResult<MonitorOut> {
 }
 
 async fn load_monitor(st: &AppState, id: i64) -> ApiResult<MonitorOut> {
-    let m = store::monitors::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?;
+    let m = store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
     monitor_out(st, m).await
 }
 
 async fn check_channels(st: &AppState, ids: &[i64]) -> ApiResult<()> {
-    let known: Vec<i64> = store::notifications::list(st.db()).await?.iter().map(|c| c.id).collect();
+    let known: Vec<i64> = store::notifications::list(st.db())
+        .await?
+        .iter()
+        .map(|c| c.id)
+        .collect();
     match ids.iter().find(|id| !known.contains(id)) {
-        Some(id) => Err(ApiError::bad_request(format!("Notification channel {id} does not exist"))),
+        Some(id) => Err(ApiError::bad_request(format!(
+            "Notification channel {id} does not exist"
+        ))),
         None => Ok(()),
     }
 }
@@ -265,13 +395,23 @@ async fn list_monitors(State(st): State<AppState>, _: ApiAuth) -> ApiResult<Json
     Ok(Json(out))
 }
 
-async fn get_monitor(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<Json<MonitorOut>> {
+async fn get_monitor(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<MonitorOut>> {
     Ok(Json(load_monitor(&st, id).await?))
 }
 
-async fn create_monitor(State(st): State<AppState>, _: ApiAuth, payload: Result<Json<MonitorBody>, JsonRejection>) -> ApiResult<Response> {
+async fn create_monitor(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    payload: Result<Json<MonitorBody>, JsonRejection>,
+) -> ApiResult<Response> {
     let b = body(payload)?;
-    let input = validate_with_groups(&st, &b.to_form(), None).await?.map_err(ApiError::bad_request)?;
+    let input = validate_with_groups(&st, &b.to_form(), None)
+        .await?
+        .map_err(ApiError::bad_request)?;
     let channels = match &b.channel_ids {
         Some(ids) => ids.clone(),
         None => store::notifications::default_ids(st.db()).await?,
@@ -289,9 +429,13 @@ async fn update_monitor(
     Path(id): Path<i64>,
     payload: Result<Json<MonitorBody>, JsonRejection>,
 ) -> ApiResult<Json<MonitorOut>> {
-    store::monitors::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?;
+    store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
     let b = body(payload)?;
-    let input = validate_with_groups(&st, &b.to_form(), Some(id)).await?.map_err(ApiError::bad_request)?;
+    let input = validate_with_groups(&st, &b.to_form(), Some(id))
+        .await?
+        .map_err(ApiError::bad_request)?;
     if let Some(ids) = &b.channel_ids {
         check_channels(&st, ids).await?;
     }
@@ -303,8 +447,14 @@ async fn update_monitor(
     Ok(Json(load_monitor(&st, id).await?))
 }
 
-async fn delete_monitor(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
-    store::monitors::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?;
+async fn delete_monitor(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
     st.scheduler.stop(id).await;
     store::monitors::delete(st.db(), id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -329,20 +479,43 @@ pub struct GroupOut {
 }
 
 async fn load_group(st: &AppState, id: i64) -> ApiResult<GroupOut> {
-    let g = store::groups::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?;
-    Ok(GroupOut { id: g.id, name: g.name, sort_order: g.sort_order })
+    let g = store::groups::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(GroupOut {
+        id: g.id,
+        name: g.name,
+        sort_order: g.sort_order,
+    })
 }
 
 async fn list_groups(State(st): State<AppState>, _: ApiAuth) -> ApiResult<Json<Vec<GroupOut>>> {
     let groups = store::groups::list(st.db()).await?;
-    Ok(Json(groups.into_iter().map(|g| GroupOut { id: g.id, name: g.name, sort_order: g.sort_order }).collect()))
+    Ok(Json(
+        groups
+            .into_iter()
+            .map(|g| GroupOut {
+                id: g.id,
+                name: g.name,
+                sort_order: g.sort_order,
+            })
+            .collect(),
+    ))
 }
 
-async fn get_group(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<Json<GroupOut>> {
+async fn get_group(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<GroupOut>> {
     Ok(Json(load_group(&st, id).await?))
 }
 
-async fn create_group(State(st): State<AppState>, _: ApiAuth, payload: Result<Json<GroupBody>, JsonRejection>) -> ApiResult<Response> {
+async fn create_group(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    payload: Result<Json<GroupBody>, JsonRejection>,
+) -> ApiResult<Response> {
     let b = body(payload)?;
     let name = validate_group_name(&b.name).map_err(ApiError::bad_request)?;
     let order = match b.sort_order {
@@ -362,11 +535,21 @@ async fn update_group(
     let current = load_group(&st, id).await?;
     let b = body(payload)?;
     let name = validate_group_name(&b.name).map_err(ApiError::bad_request)?;
-    store::groups::update(st.db(), id, &name, b.sort_order.unwrap_or(current.sort_order)).await?;
+    store::groups::update(
+        st.db(),
+        id,
+        &name,
+        b.sort_order.unwrap_or(current.sort_order),
+    )
+    .await?;
     Ok(Json(load_group(&st, id).await?))
 }
 
-async fn delete_group(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+async fn delete_group(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     load_group(&st, id).await?;
     store::groups::delete(st.db(), id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -397,7 +580,14 @@ pub struct ChannelOut {
 
 impl From<NotificationChannel> for ChannelOut {
     fn from(c: NotificationChannel) -> Self {
-        Self { id: c.id, config: ChannelConfig::from_json(&c.config), name: c.name, kind: c.kind, active: c.active, is_default: c.is_default }
+        Self {
+            id: c.id,
+            config: ChannelConfig::from_json(&c.config),
+            name: c.name,
+            kind: c.kind,
+            active: c.active,
+            is_default: c.is_default,
+        }
     }
 }
 
@@ -407,27 +597,54 @@ impl ChannelBody {
         if name.is_empty() {
             return Err(ApiError::bad_request("Name is required"));
         }
-        self.config.validate(&self.kind).map_err(ApiError::bad_request)?;
+        self.config
+            .validate(&self.kind)
+            .map_err(ApiError::bad_request)?;
         Ok(name.to_string())
     }
 }
 
 async fn load_channel(st: &AppState, id: i64) -> ApiResult<ChannelOut> {
-    Ok(store::notifications::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?.into())
+    Ok(store::notifications::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?
+        .into())
 }
 
 async fn list_channels(State(st): State<AppState>, _: ApiAuth) -> ApiResult<Json<Vec<ChannelOut>>> {
-    Ok(Json(store::notifications::list(st.db()).await?.into_iter().map(ChannelOut::from).collect()))
+    Ok(Json(
+        store::notifications::list(st.db())
+            .await?
+            .into_iter()
+            .map(ChannelOut::from)
+            .collect(),
+    ))
 }
 
-async fn get_channel(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<Json<ChannelOut>> {
+async fn get_channel(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<ChannelOut>> {
     Ok(Json(load_channel(&st, id).await?))
 }
 
-async fn create_channel(State(st): State<AppState>, _: ApiAuth, payload: Result<Json<ChannelBody>, JsonRejection>) -> ApiResult<Response> {
+async fn create_channel(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    payload: Result<Json<ChannelBody>, JsonRejection>,
+) -> ApiResult<Response> {
     let b = body(payload)?;
     let name = b.validate()?;
-    let id = store::notifications::create(st.db(), &name, &b.kind, &b.config.to_json(), b.active.unwrap_or(true), b.is_default).await?;
+    let id = store::notifications::create(
+        st.db(),
+        &name,
+        &b.kind,
+        &b.config.to_json(),
+        b.active.unwrap_or(true),
+        b.is_default,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(load_channel(&st, id).await?)).into_response())
 }
 
@@ -440,11 +657,24 @@ async fn update_channel(
     load_channel(&st, id).await?;
     let b = body(payload)?;
     let name = b.validate()?;
-    store::notifications::update(st.db(), id, &name, &b.kind, &b.config.to_json(), b.active.unwrap_or(true), b.is_default).await?;
+    store::notifications::update(
+        st.db(),
+        id,
+        &name,
+        &b.kind,
+        &b.config.to_json(),
+        b.active.unwrap_or(true),
+        b.is_default,
+    )
+    .await?;
     Ok(Json(load_channel(&st, id).await?))
 }
 
-async fn delete_channel(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+async fn delete_channel(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     load_channel(&st, id).await?;
     store::notifications::delete(st.db(), id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -475,13 +705,19 @@ pub struct MaintenanceOut {
 }
 
 fn parse_time(v: &str, field: &str) -> ApiResult<i64> {
-    let dt = OffsetDateTime::parse(v.trim(), &Rfc3339)
-        .map_err(|_| ApiError::bad_request(format!("{field} must be an RFC 3339 time like 2026-05-01T22:00:00Z")))?;
+    let dt = OffsetDateTime::parse(v.trim(), &Rfc3339).map_err(|_| {
+        ApiError::bad_request(format!(
+            "{field} must be an RFC 3339 time like 2026-05-01T22:00:00Z"
+        ))
+    })?;
     Ok((dt.unix_timestamp_nanos() / 1_000_000) as i64)
 }
 
 fn format_time(ms: i64) -> String {
-    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).ok().and_then(|d| d.format(&Rfc3339).ok()).unwrap_or_default()
+    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000)
+        .ok()
+        .and_then(|d| d.format(&Rfc3339).ok())
+        .unwrap_or_default()
 }
 
 struct ValidMaintenance {
@@ -497,21 +733,37 @@ impl MaintenanceBody {
         if title.is_empty() {
             return Err(ApiError::bad_request("Title is required"));
         }
-        let (starts_at, ends_at) = (parse_time(&self.starts_at, "starts_at")?, parse_time(&self.ends_at, "ends_at")?);
+        let (starts_at, ends_at) = (
+            parse_time(&self.starts_at, "starts_at")?,
+            parse_time(&self.ends_at, "ends_at")?,
+        );
         if ends_at <= starts_at {
             return Err(ApiError::bad_request("ends_at must be after starts_at"));
         }
         if !self.all_monitors && self.monitor_ids.is_empty() {
-            return Err(ApiError::bad_request("Set all_monitors or list at least one monitor in monitor_ids"));
+            return Err(ApiError::bad_request(
+                "Set all_monitors or list at least one monitor in monitor_ids",
+            ));
         }
-        let known: Vec<i64> = store::monitors::list(st.db()).await?.iter().map(|m| m.id).collect();
+        let known: Vec<i64> = store::monitors::list(st.db())
+            .await?
+            .iter()
+            .map(|m| m.id)
+            .collect();
         if let Some(id) = self.monitor_ids.iter().find(|id| !known.contains(id)) {
-            return Err(ApiError::bad_request(format!("Monitor {id} does not exist")));
+            return Err(ApiError::bad_request(format!(
+                "Monitor {id} does not exist"
+            )));
         }
         let mut monitor_ids = self.monitor_ids.clone();
         monitor_ids.sort_unstable();
         monitor_ids.dedup();
-        Ok(ValidMaintenance { title: title.to_string(), starts_at, ends_at, monitor_ids })
+        Ok(ValidMaintenance {
+            title: title.to_string(),
+            starts_at,
+            ends_at,
+            monitor_ids,
+        })
     }
 }
 
@@ -529,11 +781,16 @@ async fn maintenance_out(st: &AppState, w: Maintenance) -> ApiResult<Maintenance
 }
 
 async fn load_maintenance(st: &AppState, id: i64) -> ApiResult<MaintenanceOut> {
-    let w = store::maintenance::get(st.db(), id).await?.ok_or_else(ApiError::not_found)?;
+    let w = store::maintenance::get(st.db(), id)
+        .await?
+        .ok_or_else(ApiError::not_found)?;
     maintenance_out(st, w).await
 }
 
-async fn list_maintenances(State(st): State<AppState>, _: ApiAuth) -> ApiResult<Json<Vec<MaintenanceOut>>> {
+async fn list_maintenances(
+    State(st): State<AppState>,
+    _: ApiAuth,
+) -> ApiResult<Json<Vec<MaintenanceOut>>> {
     let mut out = Vec::new();
     for w in store::maintenance::list(st.db()).await? {
         out.push(maintenance_out(&st, w).await?);
@@ -541,14 +798,30 @@ async fn list_maintenances(State(st): State<AppState>, _: ApiAuth) -> ApiResult<
     Ok(Json(out))
 }
 
-async fn get_maintenance(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<Json<MaintenanceOut>> {
+async fn get_maintenance(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<MaintenanceOut>> {
     Ok(Json(load_maintenance(&st, id).await?))
 }
 
-async fn create_maintenance(State(st): State<AppState>, _: ApiAuth, payload: Result<Json<MaintenanceBody>, JsonRejection>) -> ApiResult<Response> {
+async fn create_maintenance(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    payload: Result<Json<MaintenanceBody>, JsonRejection>,
+) -> ApiResult<Response> {
     let b = body(payload)?;
     let v = b.validate(&st).await?;
-    let id = store::maintenance::create(st.db(), &v.title, v.starts_at, v.ends_at, b.all_monitors, &v.monitor_ids).await?;
+    let id = store::maintenance::create(
+        st.db(),
+        &v.title,
+        v.starts_at,
+        v.ends_at,
+        b.all_monitors,
+        &v.monitor_ids,
+    )
+    .await?;
     st.ctx.maintenance.reload(st.db(), now_ms()).await?;
     Ok((StatusCode::CREATED, Json(load_maintenance(&st, id).await?)).into_response())
 }
@@ -562,12 +835,25 @@ async fn update_maintenance(
     load_maintenance(&st, id).await?;
     let b = body(payload)?;
     let v = b.validate(&st).await?;
-    store::maintenance::update(st.db(), id, &v.title, v.starts_at, v.ends_at, b.all_monitors, &v.monitor_ids).await?;
+    store::maintenance::update(
+        st.db(),
+        id,
+        &v.title,
+        v.starts_at,
+        v.ends_at,
+        b.all_monitors,
+        &v.monitor_ids,
+    )
+    .await?;
     st.ctx.maintenance.reload(st.db(), now_ms()).await?;
     Ok(Json(load_maintenance(&st, id).await?))
 }
 
-async fn delete_maintenance(State(st): State<AppState>, _: ApiAuth, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+async fn delete_maintenance(
+    State(st): State<AppState>,
+    _: ApiAuth,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
     load_maintenance(&st, id).await?;
     store::maintenance::delete(st.db(), id).await?;
     st.ctx.maintenance.reload(st.db(), now_ms()).await?;

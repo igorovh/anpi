@@ -13,7 +13,8 @@ pub enum SsoSource {
 }
 
 /// SSO settings edited in the panel; environment variables override them.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PanelSso {
     pub enabled: bool,
     pub base_url: String,
@@ -26,7 +27,9 @@ pub struct PanelSso {
 
 impl PanelSso {
     pub async fn load(db: &Db) -> sqlx::Result<Self> {
-        let get = |k: &'static str| async move { settings::get(db, k).await.map(Option::unwrap_or_default) };
+        let get = |k: &'static str| async move {
+            settings::get(db, k).await.map(Option::unwrap_or_default)
+        };
         Ok(Self {
             enabled: get("oidc_enabled").await? == "1",
             base_url: get("base_url").await?,
@@ -70,7 +73,9 @@ pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     if trimmed.is_empty() {
         return Ok(String::new());
     }
-    let u = url::Url::parse(trimmed).map_err(|_| "Public URL must be a full address like https://status.example.com".to_string())?;
+    let u = url::Url::parse(trimmed).map_err(|_| {
+        "Public URL must be a full address like https://status.example.com".to_string()
+    })?;
     if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
         return Err("Public URL must start with http:// or https://".into());
     }
@@ -86,7 +91,11 @@ pub struct AuthRuntime {
 
 impl Default for AuthRuntime {
     fn default() -> Self {
-        Self { oidc: None, base_url: None, source: SsoSource::Off }
+        Self {
+            oidc: None,
+            base_url: None,
+            source: SsoSource::Off,
+        }
     }
 }
 
@@ -103,11 +112,22 @@ pub fn resolve(config: &Config, panel: &PanelSso) -> AuthRuntime {
         (None, false) => (None, SsoSource::Off),
     };
     let oidc = match (oidc_cfg, &base_url) {
-        (Some(cfg), Some(base)) => Some(Arc::new(Oidc::new(cfg, format!("{base}/auth/oidc/callback")))),
+        (Some(cfg), Some(base)) => Some(Arc::new(Oidc::new(
+            cfg,
+            format!("{base}/auth/oidc/callback"),
+        ))),
         _ => None,
     };
-    let source = if oidc.is_some() { source } else { SsoSource::Off };
-    AuthRuntime { oidc, base_url, source }
+    let source = if oidc.is_some() {
+        source
+    } else {
+        SsoSource::Off
+    };
+    AuthRuntime {
+        oidc,
+        base_url,
+        source,
+    }
 }
 
 #[cfg(test)]
@@ -116,7 +136,13 @@ mod tests {
     use std::collections::HashMap;
 
     fn config(pairs: &[(&str, &str)]) -> Config {
-        Config::from_map(&pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>()).unwrap()
+        Config::from_map(
+            &pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+        .unwrap()
     }
 
     fn panel(enabled: bool) -> PanelSso {
@@ -139,9 +165,17 @@ mod tests {
 
     #[test]
     fn environment_overrides_the_panel() {
-        let env = config(&[("ANPI_OIDC_ISSUER", "https://env/realms/x"), ("ANPI_OIDC_CLIENT_ID", "envc"), ("ANPI_BASE_URL", "https://env.example")]);
+        let env = config(&[
+            ("ANPI_OIDC_ISSUER", "https://env/realms/x"),
+            ("ANPI_OIDC_CLIENT_ID", "envc"),
+            ("ANPI_BASE_URL", "https://env.example"),
+        ]);
         let r = resolve(&env, &panel(false));
-        assert_eq!(r.source, SsoSource::Env, "env enables SSO even if the panel switch is off");
+        assert_eq!(
+            r.source,
+            SsoSource::Env,
+            "env enables SSO even if the panel switch is off"
+        );
         assert_eq!(r.base_url.as_deref(), Some("https://env.example"));
     }
 
@@ -152,12 +186,19 @@ mod tests {
         assert_eq!(resolve(&config(&[]), &p).source, SsoSource::Off);
         let mut p = panel(true);
         p.base_url.clear();
-        assert_eq!(resolve(&config(&[]), &p).source, SsoSource::Off, "a redirect URL is required");
+        assert_eq!(
+            resolve(&config(&[]), &p).source,
+            SsoSource::Off,
+            "a redirect URL is required"
+        );
     }
 
     #[test]
     fn base_url_is_normalized() {
-        assert_eq!(normalize_base_url(" https://s.example.com/ ").unwrap(), "https://s.example.com");
+        assert_eq!(
+            normalize_base_url(" https://s.example.com/ ").unwrap(),
+            "https://s.example.com"
+        );
         assert_eq!(normalize_base_url("").unwrap(), "");
         assert!(normalize_base_url("status.example.com").is_err());
     }

@@ -73,17 +73,28 @@ pub async fn open_incident(db: &Db, monitor_id: i64) -> sqlx::Result<Option<Inci
         .await
 }
 
-pub async fn create_incident(db: &Db, monitor_id: i64, started_at: i64, message: &str) -> sqlx::Result<i64> {
-    sqlx::query_scalar("INSERT INTO incidents (monitor_id, started_at, message) VALUES (?, ?, ?) RETURNING id")
-        .bind(monitor_id)
-        .bind(started_at)
-        .bind(message)
-        .fetch_one(db)
-        .await
+pub async fn create_incident(
+    db: &Db,
+    monitor_id: i64,
+    started_at: i64,
+    message: &str,
+) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "INSERT INTO incidents (monitor_id, started_at, message) VALUES (?, ?, ?) RETURNING id",
+    )
+    .bind(monitor_id)
+    .bind(started_at)
+    .bind(message)
+    .fetch_one(db)
+    .await
 }
 
 pub async fn close_incident(db: &Db, id: i64, ended_at: i64) -> sqlx::Result<()> {
-    sqlx::query("UPDATE incidents SET ended_at = ? WHERE id = ?").bind(ended_at).bind(id).execute(db).await?;
+    sqlx::query("UPDATE incidents SET ended_at = ? WHERE id = ?")
+        .bind(ended_at)
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
@@ -95,7 +106,17 @@ pub struct IncidentRow {
     pub group: Option<String>,
 }
 
-type IncidentJoin = (i64, i64, i64, Option<i64>, String, String, Option<i64>, Option<String>, Option<String>);
+type IncidentJoin = (
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    String,
+    String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+);
 
 /// Offset of a page clamped to the existing pages, matching `views::Pager`.
 fn offset(total: i64, page: i64, per_page: i64) -> i64 {
@@ -105,17 +126,41 @@ fn offset(total: i64, page: i64, per_page: i64) -> i64 {
 
 fn rows(raw: Vec<IncidentJoin>) -> Vec<IncidentRow> {
     raw.into_iter()
-        .map(|(id, monitor_id, started_at, ended_at, message, monitor_name, parent_id, parent_name, group)| IncidentRow {
-            incident: Incident { id, monitor_id, started_at, ended_at, message },
-            monitor_name,
-            parent: parent_id.zip(parent_name),
-            group,
-        })
+        .map(
+            |(
+                id,
+                monitor_id,
+                started_at,
+                ended_at,
+                message,
+                monitor_name,
+                parent_id,
+                parent_name,
+                group,
+            )| IncidentRow {
+                incident: Incident {
+                    id,
+                    monitor_id,
+                    started_at,
+                    ended_at,
+                    message,
+                },
+                monitor_name,
+                parent: parent_id.zip(parent_name),
+                group,
+            },
+        )
         .collect()
 }
 
 /// One page of incidents: ongoing first, then newest first.
-pub async fn incidents_page(db: &Db, monitor_id: Option<i64>, ongoing_only: bool, page: i64, per_page: i64) -> sqlx::Result<(Vec<IncidentRow>, i64)> {
+pub async fn incidents_page(
+    db: &Db,
+    monitor_id: Option<i64>,
+    ongoing_only: bool,
+    page: i64,
+    per_page: i64,
+) -> sqlx::Result<(Vec<IncidentRow>, i64)> {
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM incidents i WHERE (?1 IS NULL OR i.monitor_id = ?1) AND (?2 = 0 OR i.ended_at IS NULL)")
         .bind(monitor_id)
         .bind(ongoing_only)
@@ -138,7 +183,10 @@ pub async fn incidents_page(db: &Db, monitor_id: Option<i64>, ongoing_only: bool
 }
 
 /// The newest incidents of public monitors, under their public names, plus whether more exist.
-pub async fn public_recent_incidents(db: &Db, limit: i64) -> sqlx::Result<(Vec<IncidentRow>, bool)> {
+pub async fn public_recent_incidents(
+    db: &Db,
+    limit: i64,
+) -> sqlx::Result<(Vec<IncidentRow>, bool)> {
     let raw: Vec<IncidentJoin> = sqlx::query_as(
         "SELECT i.id, i.monitor_id, i.started_at, i.ended_at, i.message,
                 CASE WHEN TRIM(m.public_name) <> '' THEN TRIM(m.public_name) ELSE m.name END,
@@ -158,13 +206,23 @@ pub async fn public_recent_incidents(db: &Db, limit: i64) -> sqlx::Result<(Vec<I
     Ok((out, more))
 }
 
-pub async fn checks_page(db: &Db, monitor_id: i64, page: i64, per_page: i64) -> sqlx::Result<(Vec<Heartbeat>, i64)> {
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM heartbeats WHERE monitor_id = ?").bind(monitor_id).fetch_one(db).await?;
-    let list = sqlx::query_as("SELECT * FROM heartbeats WHERE monitor_id = ? ORDER BY ts DESC LIMIT ? OFFSET ?")
+pub async fn checks_page(
+    db: &Db,
+    monitor_id: i64,
+    page: i64,
+    per_page: i64,
+) -> sqlx::Result<(Vec<Heartbeat>, i64)> {
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM heartbeats WHERE monitor_id = ?")
         .bind(monitor_id)
-        .bind(per_page)
-        .bind(offset(total, page, per_page))
-        .fetch_all(db)
+        .fetch_one(db)
         .await?;
+    let list = sqlx::query_as(
+        "SELECT * FROM heartbeats WHERE monitor_id = ? ORDER BY ts DESC LIMIT ? OFFSET ?",
+    )
+    .bind(monitor_id)
+    .bind(per_page)
+    .bind(offset(total, page, per_page))
+    .fetch_all(db)
+    .await?;
     Ok((list, total))
 }

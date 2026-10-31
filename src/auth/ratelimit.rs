@@ -16,7 +16,12 @@ impl LoginLimiter {
     }
 
     pub fn with_capacity(max_attempts: u32, window: Duration, max_entries: usize) -> Self {
-        Self { max_attempts, window, max_entries: max_entries.max(1), entries: Mutex::new(HashMap::new()) }
+        Self {
+            max_attempts,
+            window,
+            max_entries: max_entries.max(1),
+            entries: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn tracked(&self) -> usize {
@@ -34,7 +39,10 @@ impl LoginLimiter {
             entries.retain(|_, (_, start)| now.duration_since(*start) < self.window);
             // Still full: forget the oldest window so memory stays bounded.
             if entries.len() >= self.max_entries
-                && let Some(oldest) = entries.iter().min_by_key(|(_, (_, start))| *start).map(|(k, _)| *k)
+                && let Some(oldest) = entries
+                    .iter()
+                    .min_by_key(|(_, (_, start))| *start)
+                    .map(|(k, _)| *k)
             {
                 entries.remove(&oldest);
             }
@@ -69,7 +77,10 @@ mod tests {
         assert!(!l.is_blocked(other, t0), "limits are per IP");
         assert!(!l.is_blocked(ip, t0 + Duration::from_secs(61)));
         l.record_failure(ip, t0 + Duration::from_secs(61));
-        assert!(!l.is_blocked(ip, t0 + Duration::from_secs(61)), "counter restarts after the window");
+        assert!(
+            !l.is_blocked(ip, t0 + Duration::from_secs(61)),
+            "counter restarts after the window"
+        );
     }
 
     #[test]
@@ -83,7 +94,10 @@ mod tests {
         }
         assert!(l.tracked() <= 100, "tracked {}", l.tracked());
         l.record_failure(target, t0 + Duration::from_secs(1));
-        assert!(l.is_blocked(target, t0 + Duration::from_secs(1)), "the newest offender is kept");
+        assert!(
+            l.is_blocked(target, t0 + Duration::from_secs(1)),
+            "the newest offender is kept"
+        );
     }
 
     #[test]

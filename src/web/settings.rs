@@ -6,12 +6,12 @@ use axum_extra::extract::Form;
 use serde::Deserialize;
 
 use super::auth_routes::CsrfForm;
+use super::backup::{self, ImportReport};
 use super::views::Layout;
 use super::{AppError, AppResult, AppState, CurrentUser, render};
 use crate::auth::oidc::Oidc;
 use crate::auth::password;
 use crate::auth::sso::{PanelSso, SsoSource, normalize_base_url};
-use super::backup::{self, ImportReport};
 use crate::report::{self, Frequency, ReportSettings};
 use crate::selfcheck;
 use crate::store::{self, settings::AppSettings};
@@ -40,17 +40,26 @@ struct MaintenancePage {
     error: Option<String>,
 }
 
-async fn maintenance_response(st: &AppState, user: &CurrentUser, notice: Option<&str>, error: Option<String>) -> AppResult<Response> {
+async fn maintenance_response(
+    st: &AppState,
+    user: &CurrentUser,
+    notice: Option<&str>,
+    error: Option<String>,
+) -> AppResult<Response> {
     let now = now_ms();
     let monitors = store::monitors::list(st.db()).await?;
-    let names: std::collections::HashMap<i64, String> = monitors.iter().map(|m| (m.id, m.name.clone())).collect();
+    let names: std::collections::HashMap<i64, String> =
+        monitors.iter().map(|m| (m.id, m.name.clone())).collect();
     let mut rows = Vec::new();
     for w in store::maintenance::list(st.db()).await? {
         let scope = if w.all_monitors {
             "All monitors".to_string()
         } else {
             let ids = store::maintenance::monitor_ids(st.db(), w.id).await?;
-            ids.iter().filter_map(|i| names.get(i).cloned()).collect::<Vec<_>>().join(", ")
+            ids.iter()
+                .filter_map(|i| names.get(i).cloned())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         let state = if now < w.starts_at {
             "scheduled"
@@ -59,9 +68,20 @@ async fn maintenance_response(st: &AppState, user: &CurrentUser, notice: Option<
         } else {
             "ended"
         };
-        rows.push(MaintenanceRow { id: w.id, title: w.title, starts: format_ts(w.starts_at), ends: format_ts(w.ends_at), scope, state });
+        rows.push(MaintenanceRow {
+            id: w.id,
+            title: w.title,
+            starts: format_ts(w.starts_at),
+            ends: format_ts(w.ends_at),
+            scope,
+            state,
+        });
     }
-    let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+    let status = if error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::OK
+    };
     let page = MaintenancePage {
         layout: Layout::admin("Maintenance", user, "maintenance").with_notice(notice),
         rows,
@@ -71,7 +91,11 @@ async fn maintenance_response(st: &AppState, user: &CurrentUser, notice: Option<
     Ok((status, render(&page)?).into_response())
 }
 
-pub async fn maintenance_page(State(st): State<AppState>, user: CurrentUser, Query(q): Query<NoticeQuery>) -> AppResult<Response> {
+pub async fn maintenance_page(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<NoticeQuery>,
+) -> AppResult<Response> {
     maintenance_response(&st, &user, q.notice.as_deref(), None).await
 }
 
@@ -87,27 +111,51 @@ pub struct MaintenanceForm {
     monitors: Vec<i64>,
 }
 
-pub async fn create_maintenance(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MaintenanceForm>) -> AppResult<Response> {
+pub async fn create_maintenance(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<MaintenanceForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let offset: i64 = f.tz_offset.parse().unwrap_or(0);
-    let parsed = (parse_local_datetime(&f.starts_at, offset), parse_local_datetime(&f.ends_at, offset));
+    let parsed = (
+        parse_local_datetime(&f.starts_at, offset),
+        parse_local_datetime(&f.ends_at, offset),
+    );
     let error = match parsed {
         _ if f.title.trim().is_empty() => Some("Title is required"),
         (Some(s), Some(e)) if e <= s => Some("End must be after start"),
-        (Some(_), Some(_)) if f.all_monitors.is_none() && f.monitors.is_empty() => Some("Pick at least one monitor or choose all"),
+        (Some(_), Some(_)) if f.all_monitors.is_none() && f.monitors.is_empty() => {
+            Some("Pick at least one monitor or choose all")
+        }
         (Some(_), Some(_)) => None,
         _ => Some("Start and end are required"),
     };
     if let Some(e) = error {
         return maintenance_response(&st, &user, None, Some(e.into())).await;
     }
-    let (Some(start), Some(end)) = parsed else { unreachable!("validated above") };
-    store::maintenance::create(st.db(), f.title.trim(), start, end, f.all_monitors.is_some(), &f.monitors).await?;
+    let (Some(start), Some(end)) = parsed else {
+        unreachable!("validated above")
+    };
+    store::maintenance::create(
+        st.db(),
+        f.title.trim(),
+        start,
+        end,
+        f.all_monitors.is_some(),
+        &f.monitors,
+    )
+    .await?;
     st.ctx.maintenance.reload(st.db(), now_ms()).await?;
     Ok(Redirect::to("/admin/maintenance?notice=created").into_response())
 }
 
-pub async fn delete_maintenance(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_maintenance(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::maintenance::delete(st.db(), id).await?;
     st.ctx.maintenance.reload(st.db(), now_ms()).await?;
@@ -163,9 +211,23 @@ struct SettingsPage {
     new_token: Option<(String, String)>,
 }
 
-const WEEKDAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const WEEKDAYS: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
 
-async fn settings_response(st: &AppState, user: &CurrentUser, notice: Option<&str>, s: Option<AppSettings>, error: Option<String>) -> AppResult<Response> {
+async fn settings_response(
+    st: &AppState,
+    user: &CurrentUser,
+    notice: Option<&str>,
+    s: Option<AppSettings>,
+    error: Option<String>,
+) -> AppResult<Response> {
     settings_page_with(st, user, notice, s, error, None).await
 }
 
@@ -186,20 +248,37 @@ async fn settings_page_with(
         .into_iter()
         .map(|u| UserRow {
             is_me: u.id == user.id,
-            source: if u.oidc_subject.is_some() { "SSO" } else { "password" },
+            source: if u.oidc_subject.is_some() {
+                "SSO"
+            } else {
+                "password"
+            },
             created: format_ts(u.created_at),
             id: u.id,
             username: u.username,
         })
         .collect();
-    let pages: (i64,) = sqlx::query_as("SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()").fetch_one(st.db()).await?;
+    let pages: (i64,) = sqlx::query_as(
+        "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+    )
+    .fetch_one(st.db())
+    .await?;
     let monitors = store::monitors::list(st.db()).await?;
     let groups = store::groups::list(st.db())
         .await?
         .into_iter()
-        .map(|g| GroupRow { monitors: monitors.iter().filter(|m| m.group_id == Some(g.id)).count(), id: g.id, name: g.name, sort_order: g.sort_order })
+        .map(|g| GroupRow {
+            monitors: monitors.iter().filter(|m| m.group_id == Some(g.id)).count(),
+            id: g.id,
+            name: g.name,
+            sort_order: g.sort_order,
+        })
         .collect();
-    let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+    let status = if error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::OK
+    };
     let report = ReportSettings::load(st.db()).await?;
     let report_channels = store::notifications::list(st.db())
         .await?
@@ -207,14 +286,26 @@ async fn settings_page_with(
         .filter(|c| c.active)
         .map(|c| (c.id, c.name, c.kind, report.channels.contains(&c.id)))
         .collect();
-    let when = |ms: i64| report::format_local(ms, report.tz_offset_min, "[weekday repr:short] [day padding:none] [month repr:short] [hour]:[minute]");
+    let when = |ms: i64| {
+        report::format_local(
+            ms,
+            report.tz_offset_min,
+            "[weekday repr:short] [day padding:none] [month repr:short] [hour]:[minute]",
+        )
+    };
     let report_next = report.next(now_ms()).map(when).unwrap_or_default();
     let heartbeat_env = st.ctx.config.heartbeat_url.is_some();
     let heartbeat_url = selfcheck::heartbeat_url(&st.ctx).await.unwrap_or_default();
-    let heartbeat_last = st.ctx.heartbeat.read().expect("heartbeat lock").clone().map(|p| match p.result {
-        Ok(code) => (format_ts(p.at), true, format!("HTTP {code}")),
-        Err(e) => (format_ts(p.at), false, e),
-    });
+    let heartbeat_last = st
+        .ctx
+        .heartbeat
+        .read()
+        .expect("heartbeat lock")
+        .clone()
+        .map(|p| match p.result {
+            Ok(code) => (format_ts(p.at), true, format!("HTTP {code}")),
+            Err(e) => (format_ts(p.at), false, e),
+        });
     let auth = st.ctx.auth();
     let mut sso_panel = PanelSso::load(st.db()).await?;
     let sso_has_secret = !sso_panel.client_secret.is_empty();
@@ -246,7 +337,15 @@ async fn settings_page_with(
         api_tokens: store::api_tokens::list(st.db())
             .await?
             .into_iter()
-            .map(|t| TokenRow { id: t.id, name: t.name, created: format_ts(t.created_at), last_used: t.last_used_at.map(format_ts).unwrap_or_else(|| "never".into()) })
+            .map(|t| TokenRow {
+                id: t.id,
+                name: t.name,
+                created: format_ts(t.created_at),
+                last_used: t
+                    .last_used_at
+                    .map(format_ts)
+                    .unwrap_or_else(|| "never".into()),
+            })
             .collect(),
         new_token,
     };
@@ -258,20 +357,46 @@ async fn settings_page_with(
 pub struct ApiTokenForm {
     csrf: String,
     name: String,
+    allow_sso: Option<String>,
 }
 
-pub async fn create_api_token(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ApiTokenForm>) -> AppResult<Response> {
+pub async fn create_api_token(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<ApiTokenForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let name = f.name.trim();
     if name.is_empty() || name.chars().count() > 60 {
-        return settings_response(&st, &user, None, None, Some("Token name is required (up to 60 characters)".into())).await;
+        return settings_response(
+            &st,
+            &user,
+            None,
+            None,
+            Some("Token name is required (up to 60 characters)".into()),
+        )
+        .await;
     }
-    let (_, token) = store::api_tokens::create(st.db(), name).await?;
+    let (_, token) =
+        store::api_tokens::create_with_sso(st.db(), name, f.allow_sso.is_some()).await?;
     tracing::warn!(user = %user.username, token = name, "API token created");
-    settings_page_with(&st, &user, None, None, None, Some((name.to_string(), token))).await
+    settings_page_with(
+        &st,
+        &user,
+        None,
+        None,
+        None,
+        Some((name.to_string(), token)),
+    )
+    .await
 }
 
-pub async fn delete_api_token(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_api_token(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::api_tokens::delete(st.db(), id).await?;
     Ok(Redirect::to("/admin/settings?notice=deleted#api-tokens").into_response())
@@ -290,11 +415,20 @@ pub struct ReportForm {
 }
 
 /// Saves the report schedule; "send" also sends a report for the last period right away.
-pub async fn save_report(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ReportForm>) -> AppResult<Response> {
+pub async fn save_report(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<ReportForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let now = now_ms();
     let old = ReportSettings::load(st.db()).await?;
-    let num = |v: &str, lo: i64, hi: i64, def: i64| v.trim().parse::<i64>().map(|n| n.clamp(lo, hi)).unwrap_or(def);
+    let num = |v: &str, lo: i64, hi: i64, def: i64| {
+        v.trim()
+            .parse::<i64>()
+            .map(|n| n.clamp(lo, hi))
+            .unwrap_or(def)
+    };
     let mut s = ReportSettings {
         frequency: Frequency::parse(&f.frequency),
         weekday: num(&f.weekday, 0, 6, old.weekday),
@@ -304,22 +438,56 @@ pub async fn save_report(State(st): State<AppState>, user: CurrentUser, Form(f):
         last_sent: old.last_sent,
     };
     // A new schedule starts with its next slot, not with one that has already passed.
-    if (s.frequency, s.weekday, s.hour, s.tz_offset_min) != (old.frequency, old.weekday, old.hour, old.tz_offset_min) {
+    if (s.frequency, s.weekday, s.hour, s.tz_offset_min)
+        != (old.frequency, old.weekday, old.hour, old.tz_offset_min)
+    {
         s.last_sent = s.due(now).unwrap_or(0);
     }
     s.save(st.db()).await?;
     if f.action != "send" {
         return Ok(Redirect::to("/admin/settings?notice=report-saved#reports").into_response());
     }
-    let frequency = if s.frequency == Frequency::Off { Frequency::Daily } else { s.frequency };
-    let data = report::build(st.db(), &st.ctx.branding().site_name, frequency, now - frequency.period_ms(), now, s.tz_offset_min).await?;
+    let frequency = if s.frequency == Frequency::Off {
+        Frequency::Daily
+    } else {
+        s.frequency
+    };
+    let data = report::build(
+        st.db(),
+        &st.ctx.branding().site_name,
+        frequency,
+        now - frequency.period_ms(),
+        now,
+        s.tz_offset_min,
+    )
+    .await?;
     let results = report::send(st.db(), data, &s.channels).await?;
     if results.is_empty() {
-        return settings_response(&st, &user, None, None, Some("No channel to send to: tick one, or mark a channel as default.".into())).await;
+        return settings_response(
+            &st,
+            &user,
+            None,
+            None,
+            Some("No channel to send to: tick one, or mark a channel as default.".into()),
+        )
+        .await;
     }
-    let failed: Vec<String> = results.into_iter().filter_map(|(name, r)| r.err().map(|e| format!("{name}: {e}"))).collect();
+    let failed: Vec<String> = results
+        .into_iter()
+        .filter_map(|(name, r)| r.err().map(|e| format!("{name}: {e}")))
+        .collect();
     if !failed.is_empty() {
-        return settings_response(&st, &user, None, None, Some(format!("The report could not be sent to {}", failed.join("; ")))).await;
+        return settings_response(
+            &st,
+            &user,
+            None,
+            None,
+            Some(format!(
+                "The report could not be sent to {}",
+                failed.join("; ")
+            )),
+        )
+        .await;
     }
     Ok(Redirect::to("/admin/settings?notice=report-sent#reports").into_response())
 }
@@ -332,12 +500,25 @@ pub struct HeartbeatForm {
     action: String,
 }
 
-pub async fn save_heartbeat(State(st): State<AppState>, user: CurrentUser, Form(f): Form<HeartbeatForm>) -> AppResult<Response> {
+pub async fn save_heartbeat(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<HeartbeatForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     if st.ctx.config.heartbeat_url.is_none() {
         let url = f.url.trim();
-        if !url.is_empty() && !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
-            return settings_response(&st, &user, None, None, Some("The heartbeat URL must be a full http(s) URL.".into())).await;
+        if !url.is_empty()
+            && !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+        {
+            return settings_response(
+                &st,
+                &user,
+                None,
+                None,
+                Some("The heartbeat URL must be a full http(s) URL.".into()),
+            )
+            .await;
         }
         store::settings::set(st.db(), selfcheck::HEARTBEAT_URL_KEY, url).await?;
     }
@@ -345,18 +526,37 @@ pub async fn save_heartbeat(State(st): State<AppState>, user: CurrentUser, Form(
         return Ok(Redirect::to("/admin/settings?notice=saved#self-monitoring").into_response());
     }
     let Some(url) = selfcheck::heartbeat_url(&st.ctx).await else {
-        return settings_response(&st, &user, None, None, Some("Enter a heartbeat URL first.".into())).await;
+        return settings_response(
+            &st,
+            &user,
+            None,
+            None,
+            Some("Enter a heartbeat URL first.".into()),
+        )
+        .await;
     };
     let result = selfcheck::ping(&url).await;
-    let error = result.as_ref().err().map(|e| format!("The heartbeat ping failed: {e}"));
-    *st.ctx.heartbeat.write().expect("heartbeat lock") = Some(selfcheck::PingResult { at: now_ms(), result });
+    let error = result
+        .as_ref()
+        .err()
+        .map(|e| format!("The heartbeat ping failed: {e}"));
+    *st.ctx.heartbeat.write().expect("heartbeat lock") = Some(selfcheck::PingResult {
+        at: now_ms(),
+        result,
+    });
     match error {
         Some(e) => settings_response(&st, &user, None, None, Some(e)).await,
-        None => Ok(Redirect::to("/admin/settings?notice=heartbeat-ok#self-monitoring").into_response()),
+        None => {
+            Ok(Redirect::to("/admin/settings?notice=heartbeat-ok#self-monitoring").into_response())
+        }
     }
 }
 
-pub async fn settings_page(State(st): State<AppState>, user: CurrentUser, Query(q): Query<NoticeQuery>) -> AppResult<Response> {
+pub async fn settings_page(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<NoticeQuery>,
+) -> AppResult<Response> {
     settings_response(&st, &user, q.notice.as_deref(), None, None).await
 }
 
@@ -387,7 +587,12 @@ impl SettingsForm {
             status_description: self.status_description.trim().chars().take(1000).collect(),
             raw_retention_hours: num(&self.raw_retention_hours, "Raw history", 1, 24 * 90)?,
             hourly_retention_days: num(&self.hourly_retention_days, "Hourly history", 1, 3650)?,
-            incident_retention_days: num(&self.incident_retention_days, "Incident history", 1, 3650)?,
+            incident_retention_days: num(
+                &self.incident_retention_days,
+                "Incident history",
+                1,
+                3650,
+            )?,
             incidents_shown: match self.incidents_shown.trim() {
                 "" => AppSettings::default().incidents_shown,
                 v => num(v, "Incidents on the status page", 0, 50)?,
@@ -396,7 +601,11 @@ impl SettingsForm {
     }
 }
 
-pub async fn save_settings(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SettingsForm>) -> AppResult<Response> {
+pub async fn save_settings(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<SettingsForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     match f.validate() {
         Ok(s) => {
@@ -422,17 +631,26 @@ pub struct NewUserForm {
     password: String,
 }
 
-pub async fn create_user(State(st): State<AppState>, user: CurrentUser, Form(f): Form<NewUserForm>) -> AppResult<Response> {
+pub async fn create_user(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<NewUserForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     if st.oidc().is_some() {
-        return Err(AppError::forbidden("Users are managed by the identity provider."));
+        return Err(AppError::forbidden(
+            "Users are managed by the identity provider.",
+        ));
     }
     let username = f.username.trim();
     let error = if username.is_empty() || username.len() > 64 {
         Some("Username is required (up to 64 characters)".to_string())
     } else if let Err(e) = password::check_strength(&f.password) {
         Some(e)
-    } else if store::users::by_username(st.db(), username).await?.is_some() {
+    } else if store::users::by_username(st.db(), username)
+        .await?
+        .is_some()
+    {
         Some("That username is taken".to_string())
     } else {
         None
@@ -440,11 +658,17 @@ pub async fn create_user(State(st): State<AppState>, user: CurrentUser, Form(f):
     if let Some(e) = error {
         return settings_response(&st, &user, None, None, Some(e)).await;
     }
-    store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?).await?;
+    store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?)
+        .await?;
     Ok(Redirect::to("/admin/settings?notice=created").into_response())
 }
 
-pub async fn delete_user(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_user(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     if id == user.id {
         return Err(AppError::bad_request("You cannot delete your own account."));
@@ -462,13 +686,26 @@ pub struct PasswordForm {
     confirm: String,
 }
 
-pub async fn change_password(State(st): State<AppState>, user: CurrentUser, Form(f): Form<PasswordForm>) -> AppResult<Response> {
+pub async fn change_password(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<PasswordForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let u = store::users::by_id(st.db(), user.id).await?.ok_or_else(AppError::not_found)?;
+    let u = store::users::by_id(st.db(), user.id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let Some(hash) = u.password_hash.as_deref() else {
         return Err(AppError::bad_request("This account signs in with SSO."));
     };
-    let current_ok = password::verify_async(&f.current, Some(hash)).await.map_err(|_| AppError(StatusCode::SERVICE_UNAVAILABLE, "Server busy, try again".into()))?;
+    let current_ok = password::verify_async(&f.current, Some(hash))
+        .await
+        .map_err(|_| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Server busy, try again".into(),
+            )
+        })?;
     let error = if !current_ok {
         Some("Current password is wrong".to_string())
     } else if f.new_password != f.confirm {
@@ -479,7 +716,12 @@ pub async fn change_password(State(st): State<AppState>, user: CurrentUser, Form
     if let Some(e) = error {
         return settings_response(&st, &user, None, None, Some(e)).await;
     }
-    store::users::set_password(st.db(), user.id, &password::hash_async(&f.new_password).await?).await?;
+    store::users::set_password(
+        st.db(),
+        user.id,
+        &password::hash_async(&f.new_password).await?,
+    )
+    .await?;
     // Sign out other devices; the current browser keeps a fresh session.
     store::users::delete_user_sessions(st.db(), user.id).await?;
     let token = store::users::create_session(st.db(), user.id, None).await?;
@@ -496,7 +738,12 @@ struct ImportPage {
 }
 
 pub async fn import_page(user: CurrentUser) -> AppResult<Response> {
-    Ok(render(&ImportPage { layout: Layout::admin("Import", &user, "settings"), report: None, error: None })?.into_response())
+    Ok(render(&ImportPage {
+        layout: Layout::admin("Import", &user, "settings"),
+        report: None,
+        error: None,
+    })?
+    .into_response())
 }
 
 #[derive(Deserialize, Default)]
@@ -508,18 +755,33 @@ pub struct ImportForm {
     confirm_replace: Option<String>,
 }
 
-pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ImportForm>) -> AppResult<Response> {
+pub async fn import(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<ImportForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let layout = Layout::admin("Import", &user, "settings");
     let fail = |layout, e: String| -> AppResult<Response> {
-        Ok((StatusCode::BAD_REQUEST, render(&ImportPage { layout, report: None, error: Some(e) })?).into_response())
+        Ok((
+            StatusCode::BAD_REQUEST,
+            render(&ImportPage {
+                layout,
+                report: None,
+                error: Some(e),
+            })?,
+        )
+            .into_response())
     };
     if !backup::is_backup(&f.json) {
         return fail(layout, "This is not an anpi configuration export.".into());
     }
     let replace = f.mode == "replace";
     if replace && f.confirm_replace.is_none() {
-        return fail(layout, "Tick the confirmation to replace the current configuration.".into());
+        return fail(
+            layout,
+            "Tick the confirmation to replace the current configuration.".into(),
+        );
     }
     if replace {
         for m in store::monitors::list(st.db()).await? {
@@ -533,7 +795,12 @@ pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form
     match result {
         Ok(report) => {
             st.scheduler.start_all_missing().await?;
-            Ok(render(&ImportPage { layout, report: Some(report), error: None })?.into_response())
+            Ok(render(&ImportPage {
+                layout,
+                report: Some(report),
+                error: None,
+            })?
+            .into_response())
         }
         Err(e) => fail(layout, e),
     }
@@ -542,11 +809,20 @@ pub async fn import(State(st): State<AppState>, user: CurrentUser, Form(f): Form
 pub async fn export(State(st): State<AppState>, _user: CurrentUser) -> AppResult<Response> {
     let b = backup::export(st.db()).await?;
     let json = serde_json::to_string_pretty(&b)?;
-    let date = crate::util::format_ts(now_ms()).get(..10).unwrap_or("backup").to_string();
+    let date = crate::util::format_ts(now_ms())
+        .get(..10)
+        .unwrap_or("backup")
+        .to_string();
     Ok((
         [
-            (axum::http::header::CONTENT_TYPE, "application/json".to_string()),
-            (axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"anpi-config-{date}.json\"")),
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/json".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"anpi-config-{date}.json\""),
+            ),
             (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
         ],
         json,
@@ -568,8 +844,20 @@ pub struct SsoForm {
 }
 
 impl SsoForm {
+    pub(super) fn from_panel(p: PanelSso) -> Self {
+        Self {
+            csrf: String::new(),
+            enabled: p.enabled.then(|| "on".to_string()),
+            base_url: p.base_url,
+            issuer: p.issuer,
+            client_id: p.client_id,
+            client_secret: p.client_secret,
+            required_role: p.required_role,
+            scopes: p.scopes,
+        }
+    }
     /// Applies the form onto stored settings; an empty secret keeps the stored one.
-    fn apply(&self, mut panel: PanelSso) -> Result<PanelSso, String> {
+    pub(super) fn apply(&self, mut panel: PanelSso) -> Result<PanelSso, String> {
         panel.base_url = normalize_base_url(&self.base_url)?;
         panel.issuer = self.issuer.trim().trim_end_matches('/').to_string();
         panel.client_id = self.client_id.trim().to_string();
@@ -581,7 +869,9 @@ impl SsoForm {
         panel.enabled = self.enabled.is_some();
         if panel.enabled {
             if panel.base_url.is_empty() {
-                return Err("Public URL is required for SSO (it builds the redirect address)".into());
+                return Err(
+                    "Public URL is required for SSO (it builds the redirect address)".into(),
+                );
             }
             if panel.oidc_config().is_none() {
                 return Err("Issuer URL and client ID are required for SSO".into());
@@ -591,18 +881,33 @@ impl SsoForm {
     }
 }
 
-async fn probe(panel: &PanelSso) -> Result<String, String> {
-    let cfg = panel.oidc_config().ok_or("Issuer URL and client ID are required")?;
-    let base = if panel.base_url.is_empty() { "http://localhost".to_string() } else { panel.base_url.clone() };
+pub(super) async fn probe(panel: &PanelSso) -> Result<String, String> {
+    let cfg = panel
+        .oidc_config()
+        .ok_or("Issuer URL and client ID are required")?;
+    let base = if panel.base_url.is_empty() {
+        "http://localhost".to_string()
+    } else {
+        panel.base_url.clone()
+    };
     let oidc = Oidc::new(cfg, format!("{base}/auth/oidc/callback"));
     let d = oidc.discovery().await?;
-    Ok(format!("Connected to {}; sign-in goes to {}", d.issuer, d.authorization_endpoint))
+    Ok(format!(
+        "Connected to {}; sign-in goes to {}",
+        d.issuer, d.authorization_endpoint
+    ))
 }
 
-pub async fn save_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SsoForm>) -> AppResult<Response> {
+pub async fn save_sso(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<SsoForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     if st.ctx.auth().source == SsoSource::Env {
-        return Err(AppError::forbidden("SSO is configured through environment variables on the server."));
+        return Err(AppError::forbidden(
+            "SSO is configured through environment variables on the server.",
+        ));
     }
     let panel = match f.apply(PanelSso::load(st.db()).await?) {
         Ok(p) => p,
@@ -612,7 +917,8 @@ pub async fn save_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Fo
     if panel.enabled
         && let Err(e) = probe(&panel).await
     {
-        let msg = format!("SSO was not enabled because the identity provider could not be reached: {e}");
+        let msg =
+            format!("SSO was not enabled because the identity provider could not be reached: {e}");
         return settings_response(&st, &user, None, None, Some(msg)).await;
     }
     panel.save(st.db()).await?;
@@ -621,7 +927,11 @@ pub async fn save_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Fo
     Ok(Redirect::to("/admin/settings?notice=saved#sso").into_response())
 }
 
-pub async fn test_sso(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SsoForm>) -> AppResult<Response> {
+pub async fn test_sso(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<SsoForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let mut panel = PanelSso::load(st.db()).await?;
     let result = match (SsoForm { enabled: None, ..f }).apply(std::mem::take(&mut panel)) {

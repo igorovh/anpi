@@ -10,8 +10,13 @@ const PAD_R: f64 = 8.0;
 const PAD_T: f64 = 10.0;
 const PAD_B: f64 = 26.0;
 
-pub const PHASES: [(&str, &str); 5] =
-    [("ph-dns", "DNS"), ("ph-connect", "Connect"), ("ph-tls", "TLS"), ("ph-ttfb", "Server wait"), ("ph-transfer", "Transfer")];
+pub const PHASES: [(&str, &str); 5] = [
+    ("ph-dns", "DNS"),
+    ("ph-connect", "Connect"),
+    ("ph-tls", "TLS"),
+    ("ph-ttfb", "Server wait"),
+    ("ph-transfer", "Transfer"),
+];
 
 /// Splits a point's total into the five phases; non-HTTP monitors put everything into "wait".
 fn layers(p: &Point) -> Option<[f64; 5]> {
@@ -48,12 +53,25 @@ pub fn latency_svg(points: &[Point], since: i64, until: i64, bucket_ms: i64) -> 
     let y = |v: f64| H - PAD_B - (v / y_max) * (H - PAD_T - PAD_B);
 
     let mut svg = String::new();
-    let _ = write!(svg, r#"<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="Response time chart" preserveAspectRatio="none">"#);
+    let _ = write!(
+        svg,
+        r#"<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="Response time chart" preserveAspectRatio="none">"#
+    );
     for i in 0..=4 {
         let v = y_max * i as f64 / 4.0;
         let yy = y(v);
-        let _ = write!(svg, r#"<line class="grid" x1="{PAD_L}" x2="{}" y1="{yy:.1}" y2="{yy:.1}"/>"#, W - PAD_R);
-        let _ = write!(svg, r#"<text class="axis" x="{}" y="{:.1}" text-anchor="end">{}</text>"#, PAD_L - 6.0, yy + 4.0, format_ms(Some(v)));
+        let _ = write!(
+            svg,
+            r#"<line class="grid" x1="{PAD_L}" x2="{}" y1="{yy:.1}" y2="{yy:.1}"/>"#,
+            W - PAD_R
+        );
+        let _ = write!(
+            svg,
+            r#"<text class="axis" x="{}" y="{:.1}" text-anchor="end">{}</text>"#,
+            PAD_L - 6.0,
+            yy + 4.0,
+            format_ms(Some(v))
+        );
     }
     for i in 0..=4 {
         let t = since + ((until - since) as f64 * i as f64 / 4.0) as i64;
@@ -62,7 +80,13 @@ pub fn latency_svg(points: &[Point], since: i64, until: i64, bucket_ms: i64) -> 
             4 => "end",
             _ => "middle",
         };
-        let _ = write!(svg, r#"<text class="axis" x="{:.1}" y="{}" text-anchor="{anchor}">{}</text>"#, x(t), H - 8.0, format_ts_short(t));
+        let _ = write!(
+            svg,
+            r#"<text class="axis" x="{:.1}" y="{}" text-anchor="{anchor}">{}</text>"#,
+            x(t),
+            H - 8.0,
+            format_ts_short(t)
+        );
     }
 
     // Consecutive buckets form a segment; a gap in data breaks the area instead of bridging it.
@@ -86,16 +110,39 @@ pub fn latency_svg(points: &[Point], since: i64, until: i64, bucket_ms: i64) -> 
         }
         let mut d = String::new();
         for seg in &segments {
-            let top: Vec<(f64, f64)> = seg.iter().map(|(xx, l)| (*xx, l[..=layer].iter().sum())).collect();
-            let bottom: Vec<(f64, f64)> = seg.iter().map(|(xx, l)| (*xx, l[..layer].iter().sum())).collect();
+            let top: Vec<(f64, f64)> = seg
+                .iter()
+                .map(|(xx, l)| (*xx, l[..=layer].iter().sum()))
+                .collect();
+            let bottom: Vec<(f64, f64)> = seg
+                .iter()
+                .map(|(xx, l)| (*xx, l[..layer].iter().sum()))
+                .collect();
             if seg.len() == 1 {
                 let (xx, t) = top[0];
                 let b = bottom[0].1;
-                let _ = write!(d, "M{:.1},{:.1}L{:.1},{:.1}L{:.1},{:.1}L{:.1},{:.1}Z", xx - 2.0, y(b), xx - 2.0, y(t), xx + 2.0, y(t), xx + 2.0, y(b));
+                let _ = write!(
+                    d,
+                    "M{:.1},{:.1}L{:.1},{:.1}L{:.1},{:.1}L{:.1},{:.1}Z",
+                    xx - 2.0,
+                    y(b),
+                    xx - 2.0,
+                    y(t),
+                    xx + 2.0,
+                    y(t),
+                    xx + 2.0,
+                    y(b)
+                );
                 continue;
             }
             for (i, (xx, v)) in top.iter().enumerate() {
-                let _ = write!(d, "{}{:.1},{:.1}", if i == 0 { "M" } else { "L" }, xx, y(*v));
+                let _ = write!(
+                    d,
+                    "{}{:.1},{:.1}",
+                    if i == 0 { "M" } else { "L" },
+                    xx,
+                    y(*v)
+                );
             }
             for (xx, v) in bottom.iter().rev() {
                 let _ = write!(d, "L{:.1},{:.1}", xx, y(*v));
@@ -108,10 +155,20 @@ pub fn latency_svg(points: &[Point], since: i64, until: i64, bucket_ms: i64) -> 
     }
     let bw = ((bucket_ms as f64 / span) * (W - PAD_L - PAD_R)).max(2.0);
     for p in points.iter().filter(|p| p.down > 0) {
-        let _ = write!(svg, r#"<rect class="down-mark" x="{:.1}" y="{}" width="{bw:.1}" height="4"/>"#, x(p.t), H - PAD_B + 2.0);
+        let _ = write!(
+            svg,
+            r#"<rect class="down-mark" x="{:.1}" y="{}" width="{bw:.1}" height="4"/>"#,
+            x(p.t),
+            H - PAD_B + 2.0
+        );
     }
     if segments.is_empty() {
-        let _ = write!(svg, r#"<text class="axis empty" x="{}" y="{}" text-anchor="middle">No data in this range yet</text>"#, W / 2.0, H / 2.0);
+        let _ = write!(
+            svg,
+            r#"<text class="axis empty" x="{}" y="{}" text-anchor="middle">No data in this range yet</text>"#,
+            W / 2.0,
+            H / 2.0
+        );
     }
     svg.push_str("</svg>");
     svg
@@ -141,7 +198,9 @@ pub fn phase_breakdown(points: &[Point]) -> (String, Vec<PhaseAvg>) {
     }
     let avgs: Vec<f64> = sums.iter().map(|s| s / weight).collect();
     let total: f64 = avgs.iter().sum();
-    let mut svg = String::from(r#"<svg class="phasebar" viewBox="0 0 800 14" preserveAspectRatio="none" role="img" aria-label="Average time per phase">"#);
+    let mut svg = String::from(
+        r#"<svg class="phasebar" viewBox="0 0 800 14" preserveAspectRatio="none" role="img" aria-label="Average time per phase">"#,
+    );
     let mut xpos = 0.0;
     let mut legend = Vec::new();
     for ((class, label), v) in PHASES.iter().zip(&avgs) {
@@ -149,9 +208,16 @@ pub fn phase_breakdown(points: &[Point]) -> (String, Vec<PhaseAvg>) {
             continue;
         }
         let w = v / total.max(f64::EPSILON) * 800.0;
-        let _ = write!(svg, r#"<rect class="{class}" x="{xpos:.1}" y="0" width="{w:.1}" height="14"/>"#);
+        let _ = write!(
+            svg,
+            r#"<rect class="{class}" x="{xpos:.1}" y="0" width="{w:.1}" height="14"/>"#
+        );
         xpos += w;
-        legend.push(PhaseAvg { class, label, value: format_ms(Some(*v)) });
+        legend.push(PhaseAvg {
+            class,
+            label,
+            value: format_ms(Some(*v)),
+        });
     }
     svg.push_str("</svg>");
     (svg, legend)
@@ -163,7 +229,16 @@ mod tests {
 
     fn pt(t: i64, total: Option<f64>, phases: Option<[f64; 4]>, down: i64) -> Point {
         let [dns, connect, tls, ttfb] = phases.map(|p| p.map(Some)).unwrap_or([None; 4]);
-        Point { t, total_ms: total, dns_ms: dns, connect_ms: connect, tls_ms: tls, ttfb_ms: ttfb, up: 1, down }
+        Point {
+            t,
+            total_ms: total,
+            dns_ms: dns,
+            connect_ms: connect,
+            tls_ms: tls,
+            ttfb_ms: ttfb,
+            up: 1,
+            down,
+        }
     }
 
     #[test]
@@ -172,7 +247,10 @@ mod tests {
         assert_eq!(l, [10.0, 20.0, 30.0, 25.0, 15.0]);
         let l = layers(&pt(0, Some(50.0), Some([10.0, 20.0, 30.0, 25.0]), 0)).unwrap();
         assert_eq!(l[4], 0.0);
-        assert_eq!(layers(&pt(0, Some(42.0), None, 0)).unwrap(), [0.0, 0.0, 0.0, 42.0, 0.0]);
+        assert_eq!(
+            layers(&pt(0, Some(42.0), None, 0)).unwrap(),
+            [0.0, 0.0, 0.0, 42.0, 0.0]
+        );
         assert!(layers(&pt(0, None, None, 1)).is_none());
     }
 
@@ -186,10 +264,18 @@ mod tests {
 
     #[test]
     fn svg_marks_downtime_and_handles_empty_data() {
-        let pts = vec![pt(0, Some(10.0), None, 0), pt(60, None, None, 3), pt(120, Some(12.0), None, 0)];
+        let pts = vec![
+            pt(0, Some(10.0), None, 0),
+            pt(60, None, None, 3),
+            pt(120, Some(12.0), None, 0),
+        ];
         let svg = latency_svg(&pts, 0, 180, 60);
         assert!(svg.contains("down-mark"));
-        assert_eq!(svg.matches("<path").count(), 1, "only the non-empty layer is drawn");
+        assert_eq!(
+            svg.matches("<path").count(),
+            1,
+            "only the non-empty layer is drawn"
+        );
         assert!(latency_svg(&[], 0, 100, 10).contains("No data"));
         assert!(!svg.contains("NaN"));
     }

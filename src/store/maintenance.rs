@@ -3,13 +3,20 @@ use crate::models::Maintenance;
 use crate::util::now_ms;
 
 pub async fn list(db: &Db) -> sqlx::Result<Vec<Maintenance>> {
-    sqlx::query_as("SELECT * FROM maintenances ORDER BY starts_at DESC").fetch_all(db).await
+    sqlx::query_as("SELECT * FROM maintenances ORDER BY starts_at DESC")
+        .fetch_all(db)
+        .await
 }
 
 /// Windows that have not ended yet, with their monitor ids.
-pub async fn upcoming_with_monitors(db: &Db, now: i64) -> sqlx::Result<Vec<(Maintenance, Vec<i64>)>> {
-    let windows: Vec<Maintenance> =
-        sqlx::query_as("SELECT * FROM maintenances WHERE ends_at > ?").bind(now).fetch_all(db).await?;
+pub async fn upcoming_with_monitors(
+    db: &Db,
+    now: i64,
+) -> sqlx::Result<Vec<(Maintenance, Vec<i64>)>> {
+    let windows: Vec<Maintenance> = sqlx::query_as("SELECT * FROM maintenances WHERE ends_at > ?")
+        .bind(now)
+        .fetch_all(db)
+        .await?;
     let mut out = Vec::with_capacity(windows.len());
     for w in windows {
         let ids = monitor_ids(db, w.id).await?;
@@ -19,10 +26,20 @@ pub async fn upcoming_with_monitors(db: &Db, now: i64) -> sqlx::Result<Vec<(Main
 }
 
 pub async fn monitor_ids(db: &Db, id: i64) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar("SELECT monitor_id FROM maintenance_monitors WHERE maintenance_id = ?").bind(id).fetch_all(db).await
+    sqlx::query_scalar("SELECT monitor_id FROM maintenance_monitors WHERE maintenance_id = ?")
+        .bind(id)
+        .fetch_all(db)
+        .await
 }
 
-pub async fn create(db: &Db, title: &str, starts_at: i64, ends_at: i64, all: bool, monitors: &[i64]) -> sqlx::Result<i64> {
+pub async fn create(
+    db: &Db,
+    title: &str,
+    starts_at: i64,
+    ends_at: i64,
+    all: bool,
+    monitors: &[i64],
+) -> sqlx::Result<i64> {
     let mut tx = db.begin().await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO maintenances (title, starts_at, ends_at, all_monitors, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
@@ -35,21 +52,34 @@ pub async fn create(db: &Db, title: &str, starts_at: i64, ends_at: i64, all: boo
     .fetch_one(&mut *tx)
     .await?;
     for m in monitors {
-        sqlx::query("INSERT OR IGNORE INTO maintenance_monitors (maintenance_id, monitor_id) VALUES (?, ?)")
-            .bind(id)
-            .bind(m)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO maintenance_monitors (maintenance_id, monitor_id) VALUES (?, ?)",
+        )
+        .bind(id)
+        .bind(m)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(id)
 }
 
 pub async fn get(db: &Db, id: i64) -> sqlx::Result<Option<Maintenance>> {
-    sqlx::query_as("SELECT * FROM maintenances WHERE id = ?").bind(id).fetch_optional(db).await
+    sqlx::query_as("SELECT * FROM maintenances WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await
 }
 
-pub async fn update(db: &Db, id: i64, title: &str, starts_at: i64, ends_at: i64, all: bool, monitors: &[i64]) -> sqlx::Result<()> {
+pub async fn update(
+    db: &Db,
+    id: i64,
+    title: &str,
+    starts_at: i64,
+    ends_at: i64,
+    all: bool,
+    monitors: &[i64],
+) -> sqlx::Result<()> {
     let mut tx = db.begin().await?;
     sqlx::query("UPDATE maintenances SET title = ?, starts_at = ?, ends_at = ?, all_monitors = ? WHERE id = ?")
         .bind(title)
@@ -59,18 +89,26 @@ pub async fn update(db: &Db, id: i64, title: &str, starts_at: i64, ends_at: i64,
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM maintenance_monitors WHERE maintenance_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM maintenance_monitors WHERE maintenance_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     for m in monitors {
-        sqlx::query("INSERT OR IGNORE INTO maintenance_monitors (maintenance_id, monitor_id) VALUES (?, ?)")
-            .bind(id)
-            .bind(m)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO maintenance_monitors (maintenance_id, monitor_id) VALUES (?, ?)",
+        )
+        .bind(id)
+        .bind(m)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await
 }
 
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM maintenances WHERE id = ?").bind(id).execute(db).await?;
+    sqlx::query("DELETE FROM maintenances WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }

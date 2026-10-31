@@ -17,7 +17,13 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 pub fn config(pairs: &[(&str, &str)]) -> Config {
-    Config::from_map(&pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()).unwrap()
+    Config::from_map(
+        &pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    )
+    .unwrap()
 }
 
 pub async fn app(cfg: Config) -> anpi::App {
@@ -67,19 +73,37 @@ impl Target {
         let body = Arc::new(Mutex::new(r#"{"status":"ok"}"#.to_string()));
         let state = (status.clone(), delay_ms.clone(), body.clone());
         let router = Router::new()
-            .route("/redirect", any(|| async { (StatusCode::FOUND, [(header::LOCATION, "/")]).into_response() }))
-            .route("/loop", any(|| async { (StatusCode::FOUND, [(header::LOCATION, "/loop")]).into_response() }))
+            .route(
+                "/redirect",
+                any(|| async { (StatusCode::FOUND, [(header::LOCATION, "/")]).into_response() }),
+            )
+            .route(
+                "/loop",
+                any(|| async {
+                    (StatusCode::FOUND, [(header::LOCATION, "/loop")]).into_response()
+                }),
+            )
             .fallback(any(|State((s, d, b)): State<TargetState>| async move {
                 let delay = d.load(Ordering::SeqCst);
                 if delay > 0 {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                 }
                 let code = StatusCode::from_u16(s.load(Ordering::SeqCst)).unwrap();
-                (code, [(header::CONTENT_TYPE, "application/json")], b.lock().unwrap().clone()).into_response()
+                (
+                    code,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    b.lock().unwrap().clone(),
+                )
+                    .into_response()
             }))
             .with_state(state);
         let addr = serve(router).await;
-        Self { addr, status, delay_ms, body }
+        Self {
+            addr,
+            status,
+            delay_ms,
+            body,
+        }
     }
 
     pub fn url(&self, path: &str) -> String {
@@ -95,7 +119,9 @@ impl Target {
 pub async fn tls_server(valid_days: i64) -> (SocketAddr, i64) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).unwrap();
+    let mut params =
+        rcgen::CertificateParams::new(vec!["localhost".to_string(), "127.0.0.1".to_string()])
+            .unwrap();
     let not_after = time::OffsetDateTime::now_utc() + time::Duration::days(valid_days);
     let not_after = not_after.replace_nanosecond(0).unwrap();
     params.not_after = not_after;
@@ -116,10 +142,14 @@ pub async fn tls_server(valid_days: i64) -> (SocketAddr, i64) {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
-            let Ok((tcp, _)) = listener.accept().await else { return };
+            let Ok((tcp, _)) = listener.accept().await else {
+                return;
+            };
             let acceptor = acceptor.clone();
             tokio::spawn(async move {
-                let Ok(mut tls) = acceptor.accept(tcp).await else { return };
+                let Ok(mut tls) = acceptor.accept(tcp).await else {
+                    return;
+                };
                 let mut buf = vec![0u8; 4096];
                 let mut seen = Vec::new();
                 while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -128,7 +158,11 @@ pub async fn tls_server(valid_days: i64) -> (SocketAddr, i64) {
                         Ok(n) => seen.extend_from_slice(&buf[..n]),
                     }
                 }
-                let _ = tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+                let _ = tls
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await;
                 let _ = tls.shutdown().await;
             });
         }
@@ -152,7 +186,9 @@ impl Webhook {
             post(move |body: axum::body::Bytes| {
                 let r = r.clone();
                 async move {
-                    r.lock().unwrap().push(serde_json::from_slice(&body).unwrap_or_default());
+                    r.lock()
+                        .unwrap()
+                        .push(serde_json::from_slice(&body).unwrap_or_default());
                     StatusCode::NO_CONTENT
                 }
             }),
@@ -166,7 +202,12 @@ impl Webhook {
     }
 
     pub fn events(&self) -> Vec<String> {
-        self.received.lock().unwrap().iter().map(|v| v["event"].as_str().unwrap_or("").to_string()).collect()
+        self.received
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|v| v["event"].as_str().unwrap_or("").to_string())
+            .collect()
     }
 
     pub fn count(&self, event: &str) -> usize {
@@ -175,8 +216,13 @@ impl Webhook {
 }
 
 pub async fn add_webhook_channel(db: &anpi::db::Db, url: &str) -> i64 {
-    let cfg = anpi::notify::ChannelConfig { url: url.into(), ..Default::default() };
-    anpi::store::notifications::create(db, "hook", "webhook", &cfg.to_json(), true, false).await.unwrap()
+    let cfg = anpi::notify::ChannelConfig {
+        url: url.into(),
+        ..Default::default()
+    };
+    anpi::store::notifications::create(db, "hook", "webhook", &cfg.to_json(), true, false)
+        .await
+        .unwrap()
 }
 
 pub struct Resp {
@@ -187,7 +233,10 @@ pub struct Resp {
 
 impl Resp {
     pub fn location(&self) -> String {
-        self.headers.get(header::LOCATION).map(|v| v.to_str().unwrap().to_string()).unwrap_or_default()
+        self.headers
+            .get(header::LOCATION)
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -199,11 +248,18 @@ pub struct Client {
 
 impl Client {
     pub fn new(router: Router) -> Self {
-        Self { router, cookies: HashMap::new() }
+        Self {
+            router,
+            cookies: HashMap::new(),
+        }
     }
 
     fn cookie_header(&self) -> String {
-        self.cookies.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ")
+        self.cookies
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     pub async fn send(&mut self, req: Request<Body>) -> Resp {
@@ -221,11 +277,19 @@ impl Client {
         let status = resp.status();
         let headers = resp.headers().clone();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        Resp { status, headers, body: String::from_utf8_lossy(&bytes).into_owned() }
+        Resp {
+            status,
+            headers,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        }
     }
 
     pub async fn get(&mut self, path: &str) -> Resp {
-        let req = Request::get(path).header(header::HOST, "localhost").header(header::COOKIE, self.cookie_header()).body(Body::empty()).unwrap();
+        let req = Request::get(path)
+            .header(header::HOST, "localhost")
+            .header(header::COOKIE, self.cookie_header())
+            .body(Body::empty())
+            .unwrap();
         self.send(req).await
     }
 
@@ -233,8 +297,15 @@ impl Client {
         self.post_with(path, form, None).await
     }
 
-    pub async fn post_with(&mut self, path: &str, form: &[(&str, &str)], origin: Option<&str>) -> Resp {
-        let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(form).finish();
+    pub async fn post_with(
+        &mut self,
+        path: &str,
+        form: &[(&str, &str)],
+        origin: Option<&str>,
+    ) -> Resp {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(form)
+            .finish();
         let mut req = Request::post(path)
             .header(header::HOST, "localhost")
             .header(header::COOKIE, self.cookie_header())
@@ -245,11 +316,18 @@ impl Client {
         self.send(req.body(Body::from(body)).unwrap()).await
     }
 
-    pub async fn post_multipart(&mut self, path: &str, fields: &[(&str, &str)], file: (&str, &str, &[u8])) -> Resp {
+    pub async fn post_multipart(
+        &mut self,
+        path: &str,
+        fields: &[(&str, &str)],
+        file: (&str, &str, &[u8]),
+    ) -> Resp {
         let boundary = "anpi-test-boundary";
         let mut body = Vec::new();
         for (k, v) in fields {
-            let part = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n");
+            let part = format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+            );
             body.extend_from_slice(part.as_bytes());
         }
         let (name, filename, data) = file;
@@ -262,26 +340,43 @@ impl Client {
         let req = Request::post(path)
             .header(header::HOST, "localhost")
             .header(header::COOKIE, self.cookie_header())
-            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
             .body(Body::from(body))
             .unwrap();
         self.send(req).await
     }
 
     /// Calls the JSON API with a bearer token, without cookies.
-    pub async fn api(&mut self, method: &str, path: &str, token: &str, body: Option<serde_json::Value>) -> (StatusCode, serde_json::Value) {
-        let mut req = Request::builder().method(method).uri(path).header(header::HOST, "localhost");
+    pub async fn api(
+        &mut self,
+        method: &str,
+        path: &str,
+        token: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, "localhost");
         if !token.is_empty() {
             req = req.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
         let req = match body {
-            Some(b) => req.header(header::CONTENT_TYPE, "application/json").body(Body::from(b.to_string())),
+            Some(b) => req
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(b.to_string())),
             None => req.body(Body::empty()),
         };
         let resp = self.router.clone().oneshot(req.unwrap()).await.unwrap();
         let status = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     /// Reads the CSRF token embedded in any admin page.
@@ -296,9 +391,23 @@ impl Client {
 /// Creates the first account through the real setup flow and returns a signed-in client.
 pub async fn signed_in(app: &anpi::App) -> Client {
     let mut c = Client::new(anpi::web::router(app.state.clone()));
-    let code = app.state.setup_code.lock().unwrap().clone().expect("setup code");
+    let code = app
+        .state
+        .setup_code
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("setup code");
     let r = c
-        .post("/setup", &[("setup_code", &code), ("username", "admin"), ("password", "a-long-password"), ("password2", "a-long-password")])
+        .post(
+            "/setup",
+            &[
+                ("setup_code", &code),
+                ("username", "admin"),
+                ("password", "a-long-password"),
+                ("password2", "a-long-password"),
+            ],
+        )
         .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
     c
@@ -311,12 +420,20 @@ pub async fn ws_echo_server() -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
-            let Ok((tcp, _)) = listener.accept().await else { return };
+            let Ok((tcp, _)) = listener.accept().await else {
+                return;
+            };
             tokio::spawn(async move {
-                let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else { return };
+                let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else {
+                    return;
+                };
                 while let Some(Ok(msg)) = ws.next().await {
                     if let tokio_tungstenite::tungstenite::Message::Text(t) = msg {
-                        let _ = ws.send(tokio_tungstenite::tungstenite::Message::text(format!("echo: {t}"))).await;
+                        let _ = ws
+                            .send(tokio_tungstenite::tungstenite::Message::text(format!(
+                                "echo: {t}"
+                            )))
+                            .await;
                     }
                 }
             });

@@ -14,13 +14,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use askama::Template;
+use axum::Router;
 use axum::extract::{ConnectInfo, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use rust_embed::RustEmbed;
@@ -120,7 +120,11 @@ struct ErrorPage {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let page = ErrorPage { layout: views::Layout::bare(&crate::app::Branding::default(), "Error"), code: self.0.as_u16(), message: self.1.clone() };
+        let page = ErrorPage {
+            layout: views::Layout::bare(&crate::app::Branding::default(), "Error"),
+            code: self.0.as_u16(),
+            message: self.1.clone(),
+        };
         match page.render() {
             Ok(html) => (self.0, Html(html)).into_response(),
             Err(_) => (self.0, self.1).into_response(),
@@ -147,15 +151,25 @@ impl CurrentUser {
     pub fn check_csrf(&self, token: &str) -> AppResult<()> {
         let a = self.csrf.as_bytes();
         let b = token.as_bytes();
-        let same = a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
-        if same { Ok(()) } else { Err(AppError::forbidden("Invalid or expired form token. Reload the page and try again.")) }
+        let same =
+            a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
+        if same {
+            Ok(())
+        } else {
+            Err(AppError::forbidden(
+                "Invalid or expired form token. Reload the page and try again.",
+            ))
+        }
     }
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let jar = CookieJar::from_headers(&parts.headers);
         if let Some(c) = jar.get(SESSION_COOKIE)
             && let Ok(Some(s)) = store::users::session(state.db(), c.value()).await
@@ -169,7 +183,11 @@ impl FromRequestParts<AppState> for CurrentUser {
                 brand: state.ctx.branding(),
             });
         }
-        let next = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/admin");
+        let next = parts
+            .uri
+            .path_and_query()
+            .map(|p| p.as_str())
+            .unwrap_or("/admin");
         Err(Redirect::to(&format!("/login?next={}", urlencoding::encode(next))).into_response())
     }
 }
@@ -179,14 +197,34 @@ pub struct ClientIp(pub IpAddr);
 impl FromRequestParts<AppState> for ClientIp {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip()).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let peer = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|c| c.0.ip())
+            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
         if let Some(name) = &state.ctx.config.client_ip_header {
-            let ip = parts.headers.get(name).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok());
+            let ip = parts
+                .headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse().ok());
             return Ok(Self(ip.unwrap_or(peer)));
         }
-        let forwarded = parts.headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(",");
-        Ok(Self(client_ip(peer, state.ctx.config.trust_proxy.then_some(forwarded.as_str()))))
+        let forwarded = parts
+            .headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(Self(client_ip(
+            peer,
+            state.ctx.config.trust_proxy.then_some(forwarded.as_str()),
+        )))
     }
 }
 
@@ -202,7 +240,9 @@ pub fn client_ip(peer: IpAddr, forwarded_for: Option<&str>) -> IpAddr {
 /// so the value is resolved the way a browser would before its host is compared.
 pub fn safe_next(next: Option<&str>) -> String {
     const FALLBACK: &str = "/admin";
-    let Some(n) = next else { return FALLBACK.into() };
+    let Some(n) = next else {
+        return FALLBACK.into();
+    };
     if !n.starts_with('/') || n.chars().any(|c| c.is_control() || c == '\\') {
         return FALLBACK.into();
     }
@@ -221,7 +261,11 @@ pub fn safe_next(next: Option<&str>) -> String {
 struct Assets;
 
 // Debug builds read assets from disk on every request, so edits show up on reload.
-const ASSET_CACHE: &str = if cfg!(debug_assertions) { "no-cache" } else { "public, max-age=604800" };
+const ASSET_CACHE: &str = if cfg!(debug_assertions) {
+    "no-cache"
+} else {
+    "public, max-age=604800"
+};
 
 async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
     match Assets::get(&path) {
@@ -229,7 +273,11 @@ async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) ->
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
             (
                 [
-                    (header::CONTENT_TYPE, HeaderValue::from_str(mime.as_ref()).unwrap_or(HeaderValue::from_static("application/octet-stream"))),
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_str(mime.as_ref())
+                            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+                    ),
                     (header::CACHE_CONTROL, HeaderValue::from_static(ASSET_CACHE)),
                 ],
                 file.data,
@@ -243,8 +291,16 @@ async fn static_asset(axum::extract::Path(path): axum::extract::Path<String>) ->
 /// Rejects cross-site form posts; push endpoints are exempt because cron jobs call them.
 async fn origin_guard(req: Request, next: Next) -> Response {
     if req.method() == Method::POST && !req.uri().path().starts_with("/api/push/") {
-        let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or_default();
-        if let Some(origin) = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or_default();
+        if let Some(origin) = req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|o| o.to_str().ok())
+        {
             let origin_host = url::Url::parse(origin).ok().and_then(|u| {
                 u.host_str().map(|h| match u.port() {
                     Some(p) => format!("{h}:{p}"),
@@ -277,8 +333,14 @@ pub fn router(state: AppState) -> Router {
         .route("/events/public", get(public::public_events))
         .route("/healthz", get(healthz))
         .route("/static/{*path}", get(static_asset))
-        .route("/login", get(auth_routes::login_page).post(auth_routes::login))
-        .route("/setup", get(auth_routes::setup_page).post(auth_routes::setup))
+        .route(
+            "/login",
+            get(auth_routes::login_page).post(auth_routes::login),
+        )
+        .route(
+            "/setup",
+            get(auth_routes::setup_page).post(auth_routes::setup),
+        )
         .route("/logout", post(auth_routes::logout))
         .route("/auth/oidc/login", get(auth_routes::oidc_login))
         .route("/auth/oidc/callback", get(auth_routes::oidc_callback))
@@ -289,19 +351,37 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/monitors", post(admin::create_monitor))
         .route("/admin/monitors/test", post(admin::test_monitor))
         .route("/admin/monitors/bulk", post(admin::bulk_monitors))
-        .route("/admin/monitors/{id}", get(admin::monitor_detail).post(admin::update_monitor))
+        .route(
+            "/admin/monitors/{id}",
+            get(admin::monitor_detail).post(admin::update_monitor),
+        )
         .route("/admin/monitors/{id}/edit", get(admin::edit_monitor))
         .route("/admin/monitors/{id}/toggle", post(admin::toggle_monitor))
         .route("/admin/monitors/{id}/delete", post(admin::delete_monitor))
         .route("/admin/monitors/{id}/move", post(admin::move_monitor))
-        .route("/admin/notifications", get(channels::list).post(channels::create))
+        .route(
+            "/admin/notifications",
+            get(channels::list).post(channels::create),
+        )
         .route("/admin/notifications/new", get(channels::new_form))
-        .route("/admin/notifications/{id}", get(channels::edit_form).post(channels::update))
+        .route(
+            "/admin/notifications/{id}",
+            get(channels::edit_form).post(channels::update),
+        )
         .route("/admin/notifications/{id}/delete", post(channels::delete))
         .route("/admin/notifications/{id}/test", post(channels::test))
-        .route("/admin/maintenance", get(settings::maintenance_page).post(settings::create_maintenance))
-        .route("/admin/maintenance/{id}/delete", post(settings::delete_maintenance))
-        .route("/admin/settings", get(settings::settings_page).post(settings::save_settings))
+        .route(
+            "/admin/maintenance",
+            get(settings::maintenance_page).post(settings::create_maintenance),
+        )
+        .route(
+            "/admin/maintenance/{id}/delete",
+            post(settings::delete_maintenance),
+        )
+        .route(
+            "/admin/settings",
+            get(settings::settings_page).post(settings::save_settings),
+        )
         .route("/admin/users", post(settings::create_user))
         .route("/admin/export", get(settings::export))
         .route("/admin/branding", post(branding::save_site_name))
@@ -311,7 +391,9 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/sso/test", post(settings::test_sso))
         .route(
             "/admin/branding/logo",
-            post(branding::upload_logo).layer(axum::extract::DefaultBodyLimit::max(branding::MAX_LOGO_BYTES + 64 * 1024)),
+            post(branding::upload_logo).layer(axum::extract::DefaultBodyLimit::max(
+                branding::MAX_LOGO_BYTES + 64 * 1024,
+            )),
         )
         .route("/admin/branding/logo/delete", post(branding::delete_logo))
         .route("/admin/groups", post(branding::create_group))
@@ -320,19 +402,36 @@ pub fn router(state: AppState) -> Router {
         .route("/brand/logo", get(branding::logo))
         .route("/admin/users/{id}/delete", post(settings::delete_user))
         .route("/admin/api-tokens", post(settings::create_api_token))
-        .route("/admin/api-tokens/{id}/delete", post(settings::delete_api_token))
+        .route(
+            "/admin/api-tokens/{id}/delete",
+            post(settings::delete_api_token),
+        )
         .route("/admin/account/password", post(settings::change_password))
         .route(
             "/admin/import",
-            get(settings::import_page).post(settings::import).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
+            get(settings::import_page)
+                .post(settings::import)
+                .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)),
         )
         .fallback(|| async { AppError::not_found() })
         .layer(middleware::from_fn(origin_guard))
         .layer(CompressionLayer::new())
-        .layer(SetResponseHeaderLayer::if_not_present(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
-        .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
-        .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("same-origin")))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(csp),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        ))
         .with_state(state)
 }
 
@@ -343,21 +442,56 @@ mod tests {
     #[test]
     fn next_parameter_cannot_leave_the_site() {
         assert_eq!(safe_next(Some("/admin/monitors/3")), "/admin/monitors/3");
-        assert_eq!(safe_next(Some("/admin/monitors/3?range=7d")), "/admin/monitors/3?range=7d");
-        for evil in ["//evil.com", "/\\evil.com", "https://evil.com", "/\t/evil.com", "/\t\\evil.com", "/\n/evil.com", "/\r\n//evil.com", "evil.com", ""] {
-            assert_eq!(safe_next(Some(evil)), "/admin", "{evil:?} must not leave the site");
+        assert_eq!(
+            safe_next(Some("/admin/monitors/3?range=7d")),
+            "/admin/monitors/3?range=7d"
+        );
+        for evil in [
+            "//evil.com",
+            "/\\evil.com",
+            "https://evil.com",
+            "/\t/evil.com",
+            "/\t\\evil.com",
+            "/\n/evil.com",
+            "/\r\n//evil.com",
+            "evil.com",
+            "",
+        ] {
+            assert_eq!(
+                safe_next(Some(evil)),
+                "/admin",
+                "{evil:?} must not leave the site"
+            );
         }
-        assert_eq!(safe_next(Some("/%09/evil.com")), "/%09/evil.com", "percent-encoded tabs stay a path on this site");
+        assert_eq!(
+            safe_next(Some("/%09/evil.com")),
+            "/%09/evil.com",
+            "percent-encoded tabs stay a path on this site"
+        );
         assert_eq!(safe_next(None), "/admin");
     }
 
     #[test]
     fn client_ip_uses_the_address_added_by_the_proxy() {
         let peer: IpAddr = "10.0.0.2".parse().unwrap();
-        assert_eq!(client_ip(peer, None), peer, "headers are ignored unless the proxy is trusted");
-        assert_eq!(client_ip(peer, Some("1.2.3.4, 198.51.100.7")), "198.51.100.7".parse::<IpAddr>().unwrap());
-        assert_eq!(client_ip(peer, Some("198.51.100.7")), "198.51.100.7".parse::<IpAddr>().unwrap());
-        assert_eq!(client_ip(peer, Some("1.2.3.4, garbage")), peer, "an unparsable proxy entry falls back to the peer");
+        assert_eq!(
+            client_ip(peer, None),
+            peer,
+            "headers are ignored unless the proxy is trusted"
+        );
+        assert_eq!(
+            client_ip(peer, Some("1.2.3.4, 198.51.100.7")),
+            "198.51.100.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            client_ip(peer, Some("198.51.100.7")),
+            "198.51.100.7".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            client_ip(peer, Some("1.2.3.4, garbage")),
+            peer,
+            "an unparsable proxy entry falls back to the peer"
+        );
         assert_eq!(client_ip(peer, Some("")), peer);
     }
 }

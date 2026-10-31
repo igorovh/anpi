@@ -50,7 +50,9 @@ fn public_status(active: bool, status: Option<Status>) -> (&'static str, &'stati
 }
 
 fn min_opt(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
-    values.flatten().fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.min(b))))
+    values
+        .flatten()
+        .fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.min(b))))
 }
 
 impl PublicMonitor {
@@ -60,14 +62,19 @@ impl PublicMonitor {
             return;
         }
         let own = if self.aggregate { None } else { self.status };
-        if let Some(worst) = Status::worst(own.into_iter().chain(self.children.iter().filter_map(|c| c.status))) {
+        if let Some(worst) = Status::worst(
+            own.into_iter()
+                .chain(self.children.iter().filter_map(|c| c.status)),
+        ) {
             self.status = Some(worst);
             (self.status_class, self.status_label) = public_status(true, Some(worst));
         }
         let own_24 = if self.aggregate { None } else { self.up_24h };
         let own_30 = if self.aggregate { None } else { self.up_30d };
-        self.up_24h = min_opt(std::iter::once(own_24).chain(self.children.iter().map(|c| c.up_24h)));
-        self.up_30d = min_opt(std::iter::once(own_30).chain(self.children.iter().map(|c| c.up_30d)));
+        self.up_24h =
+            min_opt(std::iter::once(own_24).chain(self.children.iter().map(|c| c.up_24h)));
+        self.up_30d =
+            min_opt(std::iter::once(own_30).chain(self.children.iter().map(|c| c.up_30d)));
         self.uptime_24h = format_pct(self.up_24h);
         self.uptime_30d = format_pct(self.up_30d);
         let mut strips: Vec<&[Bar]> = self.children.iter().map(|c| c.bars.as_slice()).collect();
@@ -105,20 +112,40 @@ struct StatusPage {
 }
 
 /// Groups in their configured order; ungrouped monitors come last under "Other" if any groups exist.
-pub fn group_monitors<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl Fn(&T) -> Option<i64>) -> Vec<(Option<String>, Vec<T>)> {
-    let mut buckets: Vec<(Option<i64>, Option<String>, Vec<T>)> =
-        groups.iter().map(|g| (Some(g.id), Some(g.name.clone()), Vec::new())).collect();
+pub fn group_monitors<T>(
+    groups: &[MonitorGroup],
+    items: Vec<T>,
+    group_of: impl Fn(&T) -> Option<i64>,
+) -> Vec<(Option<String>, Vec<T>)> {
+    let mut buckets: Vec<(Option<i64>, Option<String>, Vec<T>)> = groups
+        .iter()
+        .map(|g| (Some(g.id), Some(g.name.clone()), Vec::new()))
+        .collect();
     buckets.push((None, None, Vec::new()));
     for item in items {
         let gid = group_of(&item);
-        let idx = buckets.iter().position(|(id, _, _)| *id == gid && gid.is_some()).unwrap_or(buckets.len() - 1);
+        let idx = buckets
+            .iter()
+            .position(|(id, _, _)| *id == gid && gid.is_some())
+            .unwrap_or(buckets.len() - 1);
         buckets[idx].2.push(item);
     }
-    let any_grouped = buckets.iter().any(|(id, _, v)| id.is_some() && !v.is_empty());
+    let any_grouped = buckets
+        .iter()
+        .any(|(id, _, v)| id.is_some() && !v.is_empty());
     buckets
         .into_iter()
         .filter(|(_, _, v)| !v.is_empty())
-        .map(|(id, name, v)| (if id.is_none() && any_grouped { Some("Other".to_string()) } else { name }, v))
+        .map(|(id, name, v)| {
+            (
+                if id.is_none() && any_grouped {
+                    Some("Other".to_string())
+                } else {
+                    name
+                },
+                v,
+            )
+        })
         .collect()
 }
 
@@ -129,9 +156,19 @@ pub struct GroupBucket<T> {
 }
 
 /// Like `group_monitors`, but keeps empty groups so they can be drop targets in the panel.
-pub fn group_buckets<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl Fn(&T) -> Option<i64>) -> Vec<GroupBucket<T>> {
-    let mut buckets: Vec<GroupBucket<T>> =
-        groups.iter().map(|g| GroupBucket { id: Some(g.id), name: Some(g.name.clone()), items: Vec::new() }).collect();
+pub fn group_buckets<T>(
+    groups: &[MonitorGroup],
+    items: Vec<T>,
+    group_of: impl Fn(&T) -> Option<i64>,
+) -> Vec<GroupBucket<T>> {
+    let mut buckets: Vec<GroupBucket<T>> = groups
+        .iter()
+        .map(|g| GroupBucket {
+            id: Some(g.id),
+            name: Some(g.name.clone()),
+            items: Vec::new(),
+        })
+        .collect();
     let known: Vec<i64> = groups.iter().map(|g| g.id).collect();
     let mut loose = Vec::new();
     for item in items {
@@ -141,7 +178,11 @@ pub fn group_buckets<T>(groups: &[MonitorGroup], items: Vec<T>, group_of: impl F
         }
     }
     let name = (!groups.is_empty()).then(|| "No group".to_string());
-    buckets.push(GroupBucket { id: None, name, items: loose });
+    buckets.push(GroupBucket {
+        id: None,
+        name,
+        items: loose,
+    });
     buckets
 }
 
@@ -177,7 +218,11 @@ async fn load_public(st: &AppState) -> AppResult<Vec<PublicMonitor>> {
         .map(|m| {
             let aggregate = m.kind() == MonitorKind::Aggregate;
             let last = latest.get(&m.id).and_then(|v| v.last());
-            let status = if m.active { last.map(|b| b.status()) } else { None };
+            let status = if m.active {
+                last.map(|b| b.status())
+            } else {
+                None
+            };
             let (status_class, status_label) = public_status(m.active, status);
             let (u24, u30) = (up24.get(&m.id).copied(), up30.get(&m.id).copied());
             PublicMonitor {
@@ -210,7 +255,8 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
     let monitors = load_public(&st).await?;
     let all_groups = store::groups::list(st.db()).await?;
     let now = now_ms();
-    let (rows, more_incidents) = store::heartbeats::public_recent_incidents(st.db(), settings.incidents_shown).await?;
+    let (rows, more_incidents) =
+        store::heartbeats::public_recent_incidents(st.db(), settings.incidents_shown).await?;
     let incidents = rows
         .into_iter()
         .map(|r| {
@@ -277,8 +323,11 @@ pub async fn status_json(State(st): State<AppState>) -> AppResult<Response> {
     let settings = AppSettings::load(st.db()).await?;
     let monitors = load_public(&st).await?;
     let (_, _, status) = overall(&monitors);
-    let groups: std::collections::HashMap<i64, String> =
-        store::groups::list(st.db()).await?.into_iter().map(|g| (g.id, g.name)).collect();
+    let groups: std::collections::HashMap<i64, String> = store::groups::list(st.db())
+        .await?
+        .into_iter()
+        .map(|g| (g.id, g.name))
+        .collect();
     let json = |m: &PublicMonitor, parent: Option<i64>| MonitorJson {
         id: m.id,
         parent,
@@ -295,8 +344,18 @@ pub async fn status_json(State(st): State<AppState>) -> AppResult<Response> {
         list.push(json(m, None));
         list.extend(m.children.iter().map(|c| json(c, Some(m.id))));
     }
-    let body = StatusJson { title: settings.status_title, status, monitors: list };
-    Ok(([(axum::http::header::CACHE_CONTROL, "public, max-age=30"), (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")], Json(body))
+    let body = StatusJson {
+        title: settings.status_title,
+        status,
+        monitors: list,
+    };
+    Ok((
+        [
+            (axum::http::header::CACHE_CONTROL, "public, max-age=30"),
+            (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        Json(body),
+    )
         .into_response())
 }
 
@@ -307,21 +366,38 @@ pub struct PushQuery {
     ping: Option<String>,
 }
 
-pub async fn push(State(st): State<AppState>, Path(token): Path<String>, Query(q): Query<PushQuery>) -> Response {
-    let ok = !q.status.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("down"));
+pub async fn push(
+    State(st): State<AppState>,
+    Path(token): Path<String>,
+    Query(q): Query<PushQuery>,
+) -> Response {
+    let ok = !q
+        .status
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("down"));
     let signal = PushSignal {
         ok,
         message: q.msg.unwrap_or_default().chars().take(500).collect(),
-        ping_ms: q.ping.and_then(|p| p.parse().ok()).filter(|p: &f64| p.is_finite() && *p >= 0.0),
+        ping_ms: q
+            .ping
+            .and_then(|p| p.parse().ok())
+            .filter(|p: &f64| p.is_finite() && *p >= 0.0),
     };
     if st.scheduler.push(&token, signal).await {
         Json(serde_json::json!({ "ok": true })).into_response()
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false, "msg": "monitor not found or paused" }))).into_response()
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "msg": "monitor not found or paused" })),
+        )
+            .into_response()
     }
 }
 
-pub fn event_stream(st: &AppState, public_only: bool) -> Sse<impl Stream<Item = Result<Event, Infallible>> + use<>> {
+pub fn event_stream(
+    st: &AppState,
+    public_only: bool,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>> + use<>> {
     let rx = st.ctx.events.subscribe();
     let shutdown = st.ctx.shutdown.clone().cancelled_owned();
     let stream = futures_util::stream::unfold(rx, move |mut rx| async move {
@@ -332,7 +408,11 @@ pub fn event_stream(st: &AppState, public_only: bool) -> Sse<impl Stream<Item = 
                     if public_only && !ev.public {
                         continue;
                     }
-                    let data = if public_only { ev.redacted() } else { (*ev).clone() };
+                    let data = if public_only {
+                        ev.redacted()
+                    } else {
+                        (*ev).clone()
+                    };
                     if let Ok(event) = Event::default().json_data(&data) {
                         return Some((Ok(event), rx));
                     }
@@ -355,7 +435,12 @@ mod tests {
     use super::*;
 
     fn g(id: i64, name: &str) -> MonitorGroup {
-        MonitorGroup { id, name: name.into(), sort_order: 0, created_at: 0 }
+        MonitorGroup {
+            id,
+            name: name.into(),
+            sort_order: 0,
+            created_at: 0,
+        }
     }
 
     #[test]
@@ -363,7 +448,10 @@ mod tests {
         let groups = [g(2, "Website"), g(1, "API")];
         let items = vec![(1, Some(1)), (2, None), (3, Some(2)), (4, Some(99))];
         let out = group_monitors(&groups, items, |i| i.1);
-        let names: Vec<_> = out.iter().map(|(n, v)| (n.clone(), v.iter().map(|i| i.0).collect::<Vec<_>>())).collect();
+        let names: Vec<_> = out
+            .iter()
+            .map(|(n, v)| (n.clone(), v.iter().map(|i| i.0).collect::<Vec<_>>()))
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -378,8 +466,21 @@ mod tests {
     #[test]
     fn panel_buckets_keep_empty_groups_for_dropping() {
         let groups = [g(1, "Empty"), g(2, "Used")];
-        let out = group_buckets(&groups, vec![(10, Some(2)), (11, None), (12, Some(7))], |i| i.1);
-        let shape: Vec<_> = out.iter().map(|b| (b.id, b.name.clone(), b.items.iter().map(|i| i.0).collect::<Vec<_>>())).collect();
+        let out = group_buckets(
+            &groups,
+            vec![(10, Some(2)), (11, None), (12, Some(7))],
+            |i| i.1,
+        );
+        let shape: Vec<_> = out
+            .iter()
+            .map(|b| {
+                (
+                    b.id,
+                    b.name.clone(),
+                    b.items.iter().map(|i| i.0).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
         assert_eq!(
             shape,
             vec![
@@ -388,13 +489,20 @@ mod tests {
                 (None, Some("No group".into()), vec![11, 12]),
             ]
         );
-        assert_eq!(group_buckets::<i32>(&[], vec![1], |_| None)[0].name, None, "no header when there are no groups");
+        assert_eq!(
+            group_buckets::<i32>(&[], vec![1], |_| None)[0].name,
+            None,
+            "no header when there are no groups"
+        );
     }
 
     #[test]
     fn without_groups_there_is_no_header() {
         let out = group_monitors(&[g(1, "Empty")], vec![1, 2], |_| None);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].0, None, "an empty group is hidden and ungrouped items need no header");
+        assert_eq!(
+            out[0].0, None,
+            "an empty group is hidden and ungrouped items need no header"
+        );
     }
 }

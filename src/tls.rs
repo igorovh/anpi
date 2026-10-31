@@ -22,13 +22,19 @@ pub fn load(cert: &Path, key: &Path) -> anyhow::Result<TlsAcceptor> {
         .with_context(|| format!("reading certificate {}", cert.display()))?
         .collect::<Result<_, _>>()
         .with_context(|| format!("parsing certificate {}", cert.display()))?;
-    ensure!(!certs.is_empty(), "{} contains no certificate", cert.display());
-    let key = PrivateKeyDer::from_pem_file(key).with_context(|| format!("reading private key {}", key.display()))?;
-    let mut config = ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()?
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .context("the certificate and private key do not match")?;
+    ensure!(
+        !certs.is_empty(),
+        "{} contains no certificate",
+        cert.display()
+    );
+    let key = PrivateKeyDer::from_pem_file(key)
+        .with_context(|| format!("reading private key {}", key.display()))?;
+    let mut config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .context("the certificate and private key do not match")?;
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(TlsAcceptor::from(Arc::new(config)))
 }

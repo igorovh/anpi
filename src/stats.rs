@@ -9,7 +9,10 @@ use crate::store::settings;
 pub const AGG_UNTIL_KEY: &str = "agg_until";
 
 pub async fn agg_until(db: &Db) -> sqlx::Result<i64> {
-    Ok(settings::get(db, AGG_UNTIL_KEY).await?.and_then(|v| v.parse().ok()).unwrap_or(0))
+    Ok(settings::get(db, AGG_UNTIL_KEY)
+        .await?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0))
 }
 
 /// Uptime percentage per monitor since `since`; Pending and Maintenance are excluded.
@@ -34,11 +37,19 @@ pub async fn uptime_all(db: &Db, since: i64) -> sqlx::Result<HashMap<i64, f64>> 
         e.0 += up;
         e.1 += total;
     }
-    Ok(acc.into_iter().filter(|(_, (_, t))| *t > 0).map(|(id, (u, t))| (id, u as f64 * 100.0 / t as f64)).collect())
+    Ok(acc
+        .into_iter()
+        .filter(|(_, (_, t))| *t > 0)
+        .map(|(id, (u, t))| (id, u as f64 * 100.0 / t as f64))
+        .collect())
 }
 
 /// Per monitor in `[from, to)`: up checks, up + down checks, and all checks including pending and maintenance.
-pub async fn counts_between(db: &Db, from: i64, to: i64) -> sqlx::Result<HashMap<i64, (i64, i64, i64)>> {
+pub async fn counts_between(
+    db: &Db,
+    from: i64,
+    to: i64,
+) -> sqlx::Result<HashMap<i64, (i64, i64, i64)>> {
     let cut = agg_until(db).await?;
     let hourly: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
         "SELECT monitor_id, SUM(up), SUM(up + down), SUM(total) FROM heartbeats_hourly WHERE hour >= ? AND hour < ? GROUP BY monitor_id",
@@ -83,10 +94,24 @@ fn avg(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
-type Row = (i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64, i64);
+type Row = (
+    i64,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    i64,
+    i64,
+);
 
 /// Latency series (successful checks only) and up/down counts bucketed by `bucket_ms`.
-pub async fn series(db: &Db, monitor_id: i64, since: i64, bucket_ms: i64) -> sqlx::Result<Vec<Point>> {
+pub async fn series(
+    db: &Db,
+    monitor_id: i64,
+    since: i64,
+    bucket_ms: i64,
+) -> sqlx::Result<Vec<Point>> {
     let cut = agg_until(db).await?;
     let hourly: Vec<Row> = sqlx::query_as(
         "SELECT (hour / ?1) * ?1 AS b, AVG(avg_total_ms), AVG(avg_dns_ms), AVG(avg_connect_ms), AVG(avg_tls_ms),
@@ -113,7 +138,16 @@ pub async fn series(db: &Db, monitor_id: i64, since: i64, bucket_ms: i64) -> sql
     .await?;
     let mut map: BTreeMap<i64, Point> = BTreeMap::new();
     for (t, total, dns, connect, tls, ttfb, up, down) in hourly.into_iter().chain(raw) {
-        let p = Point { t, total_ms: total, dns_ms: dns, connect_ms: connect, tls_ms: tls, ttfb_ms: ttfb, up, down };
+        let p = Point {
+            t,
+            total_ms: total,
+            dns_ms: dns,
+            connect_ms: connect,
+            tls_ms: tls,
+            ttfb_ms: ttfb,
+            up,
+            down,
+        };
         map.entry(t)
             .and_modify(|e| {
                 e.total_ms = avg(e.total_ms, p.total_ms);
@@ -130,7 +164,11 @@ pub async fn series(db: &Db, monitor_id: i64, since: i64, bucket_ms: i64) -> sql
 }
 
 /// Up/total counts per monitor per bucket, for status bars.
-pub async fn buckets_all(db: &Db, since: i64, bucket_ms: i64) -> sqlx::Result<HashMap<i64, BTreeMap<i64, (i64, i64)>>> {
+pub async fn buckets_all(
+    db: &Db,
+    since: i64,
+    bucket_ms: i64,
+) -> sqlx::Result<HashMap<i64, BTreeMap<i64, (i64, i64)>>> {
     let cut = agg_until(db).await?;
     let hourly: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
         "SELECT monitor_id, (hour / ?1) * ?1 AS b, SUM(up), SUM(up + down) FROM heartbeats_hourly

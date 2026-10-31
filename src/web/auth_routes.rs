@@ -1,16 +1,18 @@
 use std::time::Instant;
 
 use askama::Template;
+use axum::Form;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::Form;
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde::Deserialize;
 
 use super::views::Layout;
-use super::{AppError, AppResult, AppState, ClientIp, CurrentUser, SESSION_COOKIE, render, safe_next};
+use super::{
+    AppError, AppResult, AppState, ClientIp, CurrentUser, SESSION_COOKIE, render, safe_next,
+};
 use crate::auth::oidc::BeginError;
 use crate::auth::password;
 use crate::store;
@@ -41,17 +43,40 @@ pub struct NextQuery {
     error: Option<String>,
 }
 
-fn login_page_response(st: &AppState, status: StatusCode, next: &str, username: &str, error: Option<String>) -> AppResult<Response> {
-    let page = LoginPage { layout: Layout::bare(&st.ctx.branding(), "Sign in"), sso: st.oidc().is_some(), next: next.into(), username: username.into(), error };
+fn login_page_response(
+    st: &AppState,
+    status: StatusCode,
+    next: &str,
+    username: &str,
+    error: Option<String>,
+) -> AppResult<Response> {
+    let page = LoginPage {
+        layout: Layout::bare(&st.ctx.branding(), "Sign in"),
+        sso: st.oidc().is_some(),
+        next: next.into(),
+        username: username.into(),
+        error,
+    };
     Ok((status, render(&page)?).into_response())
 }
 
-pub async fn login_page(State(st): State<AppState>, Query(q): Query<NextQuery>) -> AppResult<Response> {
+pub async fn login_page(
+    State(st): State<AppState>,
+    Query(q): Query<NextQuery>,
+) -> AppResult<Response> {
     if st.oidc().is_none() && store::users::count(st.db()).await? == 0 {
         return Ok(Redirect::to("/setup").into_response());
     }
-    let error = q.error.map(|_| "Sign-in failed. Please try again.".to_string());
-    login_page_response(&st, StatusCode::OK, &safe_next(q.next.as_deref()), "", error)
+    let error = q
+        .error
+        .map(|_| "Sign-in failed. Please try again.".to_string());
+    login_page_response(
+        &st,
+        StatusCode::OK,
+        &safe_next(q.next.as_deref()),
+        "",
+        error,
+    )
 }
 
 #[derive(Deserialize)]
@@ -61,21 +86,43 @@ pub struct LoginForm {
     next: Option<String>,
 }
 
-pub async fn login(State(st): State<AppState>, ClientIp(ip): ClientIp, jar: CookieJar, Form(f): Form<LoginForm>) -> AppResult<Response> {
+pub async fn login(
+    State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
+    jar: CookieJar,
+    Form(f): Form<LoginForm>,
+) -> AppResult<Response> {
     if st.oidc().is_some() {
         return Err(AppError::not_found());
     }
     let next = safe_next(f.next.as_deref());
     if st.limiter.is_blocked(ip, Instant::now()) {
         let msg = "Too many failed attempts. Try again in a few minutes.".to_string();
-        return login_page_response(&st, StatusCode::TOO_MANY_REQUESTS, &next, &f.username, Some(msg));
+        return login_page_response(
+            &st,
+            StatusCode::TOO_MANY_REQUESTS,
+            &next,
+            &f.username,
+            Some(msg),
+        );
     }
     let user = store::users::by_username(st.db(), f.username.trim()).await?;
-    let valid = match password::verify_async(&f.password, user.as_ref().and_then(|u| u.password_hash.as_deref())).await {
+    let valid = match password::verify_async(
+        &f.password,
+        user.as_ref().and_then(|u| u.password_hash.as_deref()),
+    )
+    .await
+    {
         Ok(v) => v,
         Err(password::Busy) => {
             let msg = "The server is busy with other sign-ins. Try again in a moment.".to_string();
-            return login_page_response(&st, StatusCode::SERVICE_UNAVAILABLE, &next, &f.username, Some(msg));
+            return login_page_response(
+                &st,
+                StatusCode::SERVICE_UNAVAILABLE,
+                &next,
+                &f.username,
+                Some(msg),
+            );
         }
     };
     match user.filter(|_| valid) {
@@ -88,7 +135,13 @@ pub async fn login(State(st): State<AppState>, ClientIp(ip): ClientIp, jar: Cook
         None => {
             st.limiter.record_failure(ip, Instant::now());
             tracing::warn!(username = %f.username, %ip, "failed sign-in");
-            login_page_response(&st, StatusCode::UNAUTHORIZED, &next, &f.username, Some("Invalid username or password.".into()))
+            login_page_response(
+                &st,
+                StatusCode::UNAUTHORIZED,
+                &next,
+                &f.username,
+                Some("Invalid username or password.".into()),
+            )
         }
     }
 }
@@ -101,7 +154,12 @@ pub async fn setup_page(State(st): State<AppState>) -> AppResult<Response> {
     if !setup_allowed(&st).await? {
         return Ok(Redirect::to("/login").into_response());
     }
-    Ok(render(&SetupPage { layout: Layout::bare(&st.ctx.branding(), "Set up"), username: String::new(), error: None })?.into_response())
+    Ok(render(&SetupPage {
+        layout: Layout::bare(&st.ctx.branding(), "Set up"),
+        username: String::new(),
+        error: None,
+    })?
+    .into_response())
 }
 
 #[derive(Deserialize)]
@@ -112,12 +170,20 @@ pub struct SetupForm {
     password2: String,
 }
 
-pub async fn setup(State(st): State<AppState>, jar: CookieJar, Form(f): Form<SetupForm>) -> AppResult<Response> {
+pub async fn setup(
+    State(st): State<AppState>,
+    jar: CookieJar,
+    Form(f): Form<SetupForm>,
+) -> AppResult<Response> {
     if !setup_allowed(&st).await? {
         return Ok(Redirect::to("/login").into_response());
     }
     let fail = |msg: &str| -> AppResult<Response> {
-        let page = SetupPage { layout: Layout::bare(&st.ctx.branding(), "Set up"), username: f.username.clone(), error: Some(msg.into()) };
+        let page = SetupPage {
+            layout: Layout::bare(&st.ctx.branding(), "Set up"),
+            username: f.username.clone(),
+            error: Some(msg.into()),
+        };
         Ok((StatusCode::BAD_REQUEST, render(&page)?).into_response())
     };
     let expected = st.setup_code.lock().expect("setup lock").clone();
@@ -134,7 +200,9 @@ pub async fn setup(State(st): State<AppState>, jar: CookieJar, Form(f): Form<Set
     if let Err(e) = password::check_strength(&f.password) {
         return fail(&e);
     }
-    let id = store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?).await?;
+    let id =
+        store::users::create_local(st.db(), username, &password::hash_async(&f.password).await?)
+            .await?;
     *st.setup_code.lock().expect("setup lock") = None;
     let token = store::users::create_session(st.db(), id, None).await?;
     tracing::info!(user = %username, "initial account created");
@@ -146,7 +214,12 @@ pub struct CsrfForm {
     pub csrf: String,
 }
 
-pub async fn logout(State(st): State<AppState>, user: CurrentUser, jar: CookieJar, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn logout(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    jar: CookieJar,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::users::delete_session(st.db(), &user.token).await?;
     let jar = jar.remove(Cookie::build(SESSION_COOKIE).path("/"));
@@ -159,15 +232,28 @@ pub async fn logout(State(st): State<AppState>, user: CurrentUser, jar: CookieJa
     Ok((jar, Redirect::to("/")).into_response())
 }
 
-pub async fn oidc_login(State(st): State<AppState>, jar: CookieJar, Query(q): Query<NextQuery>) -> AppResult<Response> {
+pub async fn oidc_login(
+    State(st): State<AppState>,
+    jar: CookieJar,
+    Query(q): Query<NextQuery>,
+) -> AppResult<Response> {
     let oidc = st.oidc().ok_or_else(AppError::not_found)?;
-    let (url, state) = oidc.begin(&safe_next(q.next.as_deref())).await.map_err(|e| match e {
-        BeginError::Busy => AppError(StatusCode::SERVICE_UNAVAILABLE, "Too many sign-ins in progress. Try again shortly.".into()),
-        BeginError::Provider(e) => {
-            tracing::error!(error = %e, "OIDC discovery failed");
-            AppError(StatusCode::BAD_GATEWAY, "The identity provider is unreachable.".into())
-        }
-    })?;
+    let (url, state) = oidc
+        .begin(&safe_next(q.next.as_deref()))
+        .await
+        .map_err(|e| match e {
+            BeginError::Busy => AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Too many sign-ins in progress. Try again shortly.".into(),
+            ),
+            BeginError::Provider(e) => {
+                tracing::error!(error = %e, "OIDC discovery failed");
+                AppError(
+                    StatusCode::BAD_GATEWAY,
+                    "The identity provider is unreachable.".into(),
+                )
+            }
+        })?;
     let cookie = Cookie::build((OIDC_STATE_COOKIE, state))
         .path("/auth/oidc")
         .http_only(true)
@@ -186,11 +272,19 @@ pub struct CallbackQuery {
     error_description: Option<String>,
 }
 
-pub async fn oidc_callback(State(st): State<AppState>, jar: CookieJar, Query(q): Query<CallbackQuery>) -> AppResult<Response> {
+pub async fn oidc_callback(
+    State(st): State<AppState>,
+    jar: CookieJar,
+    Query(q): Query<CallbackQuery>,
+) -> AppResult<Response> {
     let oidc = st.oidc().ok_or_else(AppError::not_found)?;
-    let fail = |msg: String| login_page_response(&st, StatusCode::UNAUTHORIZED, "/admin", "", Some(msg));
+    let fail =
+        |msg: String| login_page_response(&st, StatusCode::UNAUTHORIZED, "/admin", "", Some(msg));
     if let Some(err) = q.error {
-        return fail(format!("Identity provider returned an error: {}", q.error_description.unwrap_or(err)));
+        return fail(format!(
+            "Identity provider returned an error: {}",
+            q.error_description.unwrap_or(err)
+        ));
     }
     let (Some(code), Some(state)) = (q.code, q.state) else {
         return fail("Missing code or state in the callback.".into());
@@ -207,8 +301,13 @@ pub async fn oidc_callback(State(st): State<AppState>, jar: CookieJar, Query(q):
             return fail(e);
         }
     };
-    let user = store::users::upsert_oidc(st.db(), &login.issuer, &login.subject, &login.username).await?;
+    let user =
+        store::users::upsert_oidc(st.db(), &login.issuer, &login.subject, &login.username).await?;
     let token = store::users::create_session(st.db(), user.id, Some(&login.id_token)).await?;
     tracing::info!(user = %user.username, "signed in via OIDC");
-    Ok((jar.add(st.session_cookie(token)), Redirect::to(&safe_next(Some(&login.next)))).into_response())
+    Ok((
+        jar.add(st.session_cookie(token)),
+        Redirect::to(&safe_next(Some(&login.next))),
+    )
+        .into_response())
 }

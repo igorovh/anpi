@@ -49,13 +49,17 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 
 impl Release {
     pub fn version(&self) -> anyhow::Result<(u64, u64, u64)> {
-        parse_version(&self.tag_name).with_context(|| format!("unexpected release tag {:?}", self.tag_name))
+        parse_version(&self.tag_name)
+            .with_context(|| format!("unexpected release tag {:?}", self.tag_name))
     }
 
     pub fn archive_for(&self, target: &str) -> Option<(&Asset, &Asset)> {
         let name = format!("anpi-{}-{target}.tar.gz", self.tag_name);
         let archive = self.assets.iter().find(|a| a.name == name)?;
-        let sum = self.assets.iter().find(|a| a.name == format!("{name}.sha256"))?;
+        let sum = self
+            .assets
+            .iter()
+            .find(|a| a.name == format!("{name}.sha256"))?;
         Some((archive, sum))
     }
 }
@@ -69,8 +73,13 @@ pub async fn download(url: &str, accept: &str, max_bytes: usize) -> anyhow::Resu
     let r = send(&spec).await.with_context(|| format!("GET {url}"))?;
     match r.status {
         200 => {}
-        404 => bail!("no release found at {url}; the repository must be public and the version must exist"),
-        403 | 429 => bail!("GitHub refused the request (HTTP {}), probably a rate limit; try again later", r.status),
+        404 => bail!(
+            "no release found at {url}; the repository must be public and the version must exist"
+        ),
+        403 | 429 => bail!(
+            "GitHub refused the request (HTTP {}), probably a rate limit; try again later",
+            r.status
+        ),
         s => bail!("GET {url}: HTTP {s}"),
     }
     ensure!(!r.body_truncated, "{url} is larger than {max_bytes} bytes");
@@ -80,7 +89,10 @@ pub async fn download(url: &str, accept: &str, max_bytes: usize) -> anyhow::Resu
 /// The latest release, or the one tagged `v{version}`.
 pub async fn fetch_release(version: Option<&str>) -> anyhow::Result<Release> {
     let url = match version {
-        Some(v) => format!("https://api.github.com/repos/{REPO}/releases/tags/v{}", v.trim_start_matches('v')),
+        Some(v) => format!(
+            "https://api.github.com/repos/{REPO}/releases/tags/v{}",
+            v.trim_start_matches('v')
+        ),
         None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
     };
     let body = download(&url, "application/vnd.github+json", 4 * 1024 * 1024).await?;
@@ -89,10 +101,17 @@ pub async fn fetch_release(version: Option<&str>) -> anyhow::Result<Release> {
 
 /// Checks the archive against a `sha256sum`-style line: `<hex>  <file name>`.
 pub fn verify_sha256(data: &[u8], sum_file: &str) -> anyhow::Result<()> {
-    let expected = sum_file.split_whitespace().next().unwrap_or_default().to_ascii_lowercase();
+    let expected = sum_file
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     ensure!(expected.len() == 64, "the checksum file is malformed");
     let actual = hex::encode(Sha256::digest(data));
-    ensure!(actual == expected, "checksum mismatch: expected {expected}, got {actual}");
+    ensure!(
+        actual == expected,
+        "checksum mismatch: expected {expected}, got {actual}"
+    );
     Ok(())
 }
 
@@ -102,7 +121,10 @@ pub fn extract_binary(archive: &[u8]) -> anyhow::Result<Vec<u8>> {
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
-        if entry.header().entry_type().is_file() && path.file_name().is_some_and(|n| n == "anpi") && path.components().count() <= 2 {
+        if entry.header().entry_type().is_file()
+            && path.file_name().is_some_and(|n| n == "anpi")
+            && path.components().count() <= 2
+        {
             let mut out = Vec::new();
             entry.read_to_end(&mut out)?;
             ensure!(!out.is_empty(), "the archive holds an empty binary");
@@ -138,7 +160,11 @@ pub fn replace_binary(exe: &Path, new: &[u8]) -> anyhow::Result<()> {
 /// Puts `anpi.old` back in place; the replaced binary becomes the new `anpi.old`.
 pub fn rollback(exe: &Path) -> anyhow::Result<()> {
     let old = backup_path(exe);
-    ensure!(old.exists(), "there is no previous version at {}", old.display());
+    ensure!(
+        old.exists(),
+        "there is no previous version at {}",
+        old.display()
+    );
     let staged = exe.with_file_name(".anpi.new");
     let swap = || -> std::io::Result<()> {
         std::fs::copy(&old, &staged)?;
@@ -150,7 +176,10 @@ pub fn rollback(exe: &Path) -> anyhow::Result<()> {
 
 fn permission_hint(e: std::io::Error, exe: &Path) -> anyhow::Error {
     if e.kind() == std::io::ErrorKind::PermissionDenied {
-        anyhow::anyhow!("no permission to replace {}; run it with sudo", exe.display())
+        anyhow::anyhow!(
+            "no permission to replace {}; run it with sudo",
+            exe.display()
+        )
     } else {
         anyhow::anyhow!("replacing {}: {e}", exe.display())
     }
@@ -164,12 +193,21 @@ mod tests {
         Release {
             tag_name: tag.into(),
             html_url: String::new(),
-            assets: names.iter().map(|n| Asset { name: n.to_string(), browser_download_url: format!("https://dl/{n}") }).collect(),
+            assets: names
+                .iter()
+                .map(|n| Asset {
+                    name: n.to_string(),
+                    browser_download_url: format!("https://dl/{n}"),
+                })
+                .collect(),
         }
     }
 
     fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast()));
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
         for (path, data) in files {
             let mut h = tar::Header::new_gnu();
             h.set_size(data.len() as u64);
@@ -184,24 +222,36 @@ mod tests {
     fn versions_compare_numerically() {
         assert_eq!(parse_version("v0.10.2"), Some((0, 10, 2)));
         assert_eq!(parse_version("1.2.3-rc.1"), Some((1, 2, 3)));
-        assert!(parse_version("v0.10.0") > parse_version("0.9.9"), "not a string comparison");
+        assert!(
+            parse_version("v0.10.0") > parse_version("0.9.9"),
+            "not a string comparison"
+        );
         assert_eq!(parse_version("1.2"), None);
         assert_eq!(parse_version("1.2.3.4"), None);
         assert_eq!(parse_version("latest"), None);
-        assert!(parse_version(CURRENT).is_some(), "the crate version itself parses");
+        assert!(
+            parse_version(CURRENT).is_some(),
+            "the crate version itself parses"
+        );
     }
 
     #[test]
     fn picks_the_archive_and_checksum_for_this_target() {
-        let r = release("v0.2.0", &[
-            "anpi-v0.2.0-x86_64-unknown-linux-musl.tar.gz",
-            "anpi-v0.2.0-x86_64-unknown-linux-musl.tar.gz.sha256",
-            "anpi-v0.2.0-aarch64-unknown-linux-musl.tar.gz",
-        ]);
+        let r = release(
+            "v0.2.0",
+            &[
+                "anpi-v0.2.0-x86_64-unknown-linux-musl.tar.gz",
+                "anpi-v0.2.0-x86_64-unknown-linux-musl.tar.gz.sha256",
+                "anpi-v0.2.0-aarch64-unknown-linux-musl.tar.gz",
+            ],
+        );
         let (a, s) = r.archive_for("x86_64-unknown-linux-musl").unwrap();
         assert_eq!(a.name, "anpi-v0.2.0-x86_64-unknown-linux-musl.tar.gz");
         assert!(s.name.ends_with(".sha256"));
-        assert!(r.archive_for("aarch64-unknown-linux-musl").is_none(), "no checksum, no update");
+        assert!(
+            r.archive_for("aarch64-unknown-linux-musl").is_none(),
+            "no checksum, no update"
+        );
         assert!(r.archive_for("riscv64").is_none());
     }
 
@@ -211,7 +261,12 @@ mod tests {
         let good = format!("{}  anpi.tar.gz\n", hex::encode(Sha256::digest(data)));
         verify_sha256(data, &good).unwrap();
         verify_sha256(data, &good.to_uppercase()).unwrap();
-        assert!(verify_sha256(b"tampered", &good).unwrap_err().to_string().contains("mismatch"));
+        assert!(
+            verify_sha256(b"tampered", &good)
+                .unwrap_err()
+                .to_string()
+                .contains("mismatch")
+        );
         assert!(verify_sha256(data, "").is_err());
     }
 
@@ -237,10 +292,17 @@ mod tests {
         replace_binary(&exe, b"v2").unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), b"v2");
         assert_eq!(std::fs::read(backup_path(&exe)).unwrap(), b"v1");
-        assert!(!dir.path().join(".anpi.new").exists(), "no staging file left behind");
+        assert!(
+            !dir.path().join(".anpi.new").exists(),
+            "no staging file left behind"
+        );
 
         rollback(&exe).unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), b"v1");
-        assert_eq!(std::fs::read(backup_path(&exe)).unwrap(), b"v2", "rolling back twice returns to the update");
+        assert_eq!(
+            std::fs::read(backup_path(&exe)).unwrap(),
+            b"v2",
+            "rolling back twice returns to the update"
+        );
     }
 }

@@ -36,18 +36,37 @@ struct ListPage {
 }
 
 fn kind_label(kind: &str) -> &'static str {
-    notify::KINDS.iter().find(|(k, _)| *k == kind).map(|(_, l)| *l).unwrap_or("Unknown")
+    notify::KINDS
+        .iter()
+        .find(|(k, _)| *k == kind)
+        .map(|(_, l)| *l)
+        .unwrap_or("Unknown")
 }
 
-pub async fn list(State(st): State<AppState>, user: CurrentUser, Query(q): Query<ListQuery>) -> AppResult<Response> {
+pub async fn list(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<ListQuery>,
+) -> AppResult<Response> {
     let rows = store::notifications::list(st.db())
         .await?
         .into_iter()
-        .map(|c| ChannelRow { id: c.id, kind_label: kind_label(&c.kind), name: c.name, active: c.active, is_default: c.is_default })
+        .map(|c| ChannelRow {
+            id: c.id,
+            kind_label: kind_label(&c.kind),
+            name: c.name,
+            active: c.active,
+            is_default: c.is_default,
+        })
         .collect();
     // Test failures come back as a short message; it is rendered escaped.
     let error = q.error.map(|e| e.chars().take(300).collect());
-    let page = ListPage { layout: Layout::admin("Notifications", &user, "notifications").with_notice(q.notice.as_deref()), rows, error };
+    let page = ListPage {
+        layout: Layout::admin("Notifications", &user, "notifications")
+            .with_notice(q.notice.as_deref()),
+        rows,
+        error,
+    };
     Ok(render(&page)?.into_response())
 }
 
@@ -79,20 +98,49 @@ struct FormPage {
     error: Option<String>,
 }
 
-fn form_page(user: &CurrentUser, id: Option<i64>, f: ChannelForm, error: Option<String>) -> AppResult<Response> {
-    let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
-    let title = if id.is_some() { "Edit notification channel" } else { "New notification channel" };
-    let page = FormPage { layout: Layout::admin(title, user, "notifications"), id, f, kinds: notify::KINDS.to_vec(), error };
+fn form_page(
+    user: &CurrentUser,
+    id: Option<i64>,
+    f: ChannelForm,
+    error: Option<String>,
+) -> AppResult<Response> {
+    let status = if error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::OK
+    };
+    let title = if id.is_some() {
+        "Edit notification channel"
+    } else {
+        "New notification channel"
+    };
+    let page = FormPage {
+        layout: Layout::admin(title, user, "notifications"),
+        id,
+        f,
+        kinds: notify::KINDS.to_vec(),
+        error,
+    };
     Ok((status, render(&page)?).into_response())
 }
 
 pub async fn new_form(user: CurrentUser) -> AppResult<Response> {
-    let f = ChannelForm { kind: "discord".into(), active: Some("on".into()), ..Default::default() };
+    let f = ChannelForm {
+        kind: "discord".into(),
+        active: Some("on".into()),
+        ..Default::default()
+    };
     form_page(&user, None, f, None)
 }
 
-pub async fn edit_form(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>) -> AppResult<Response> {
-    let c = store::notifications::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+pub async fn edit_form(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    let c = store::notifications::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let f = ChannelForm {
         csrf: String::new(),
         name: c.name,
@@ -111,35 +159,74 @@ fn validate(f: &ChannelForm) -> Result<(), String> {
     f.cfg.validate(&f.kind)
 }
 
-pub async fn create(State(st): State<AppState>, user: CurrentUser, Form(f): Form<ChannelForm>) -> AppResult<Response> {
+pub async fn create(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<ChannelForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     if let Err(e) = validate(&f) {
         return form_page(&user, None, f, Some(e));
     }
-    store::notifications::create(st.db(), f.name.trim(), &f.kind, &f.cfg.to_json(), f.active.is_some(), f.is_default.is_some()).await?;
+    store::notifications::create(
+        st.db(),
+        f.name.trim(),
+        &f.kind,
+        &f.cfg.to_json(),
+        f.active.is_some(),
+        f.is_default.is_some(),
+    )
+    .await?;
     Ok(Redirect::to("/admin/notifications?notice=created").into_response())
 }
 
-pub async fn update(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<ChannelForm>) -> AppResult<Response> {
+pub async fn update(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<ChannelForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    store::notifications::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+    store::notifications::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     if let Err(e) = validate(&f) {
         return form_page(&user, Some(id), f, Some(e));
     }
-    store::notifications::update(st.db(), id, f.name.trim(), &f.kind, &f.cfg.to_json(), f.active.is_some(), f.is_default.is_some())
-        .await?;
+    store::notifications::update(
+        st.db(),
+        id,
+        f.name.trim(),
+        &f.kind,
+        &f.cfg.to_json(),
+        f.active.is_some(),
+        f.is_default.is_some(),
+    )
+    .await?;
     Ok(Redirect::to("/admin/notifications?notice=saved").into_response())
 }
 
-pub async fn delete(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::notifications::delete(st.db(), id).await?;
     Ok(Redirect::to("/admin/notifications?notice=deleted").into_response())
 }
 
-pub async fn test(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn test(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let c: NotificationChannel = store::notifications::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+    let c: NotificationChannel = store::notifications::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let ev = NotifyEvent {
         kind: EventKind::Test,
         monitor_name: "anpi".into(),
@@ -151,6 +238,10 @@ pub async fn test(State(st): State<AppState>, user: CurrentUser, Path(id): Path<
     };
     match notify::send_channel(&c, &ev).await {
         Ok(()) => Ok(Redirect::to("/admin/notifications?notice=test-sent").into_response()),
-        Err(e) => Ok(Redirect::to(&format!("/admin/notifications?error={}", urlencoding::encode(&format!("Test failed: {e}")))).into_response()),
+        Err(e) => Ok(Redirect::to(&format!(
+            "/admin/notifications?error={}",
+            urlencoding::encode(&format!("Test failed: {e}"))
+        ))
+        .into_response()),
     }
 }

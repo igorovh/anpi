@@ -6,7 +6,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use http::header::{ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, HOST, LOCATION, USER_AGENT};
+use http::header::{
+    ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, HOST, LOCATION, USER_AGENT,
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request};
 use http_body_util::{BodyExt, Full};
 use hyper_util::rt::TokioIo;
@@ -34,7 +36,11 @@ impl TlsConfigs {
     }
 
     pub fn client(&self, ignore_tls: bool) -> Arc<ClientConfig> {
-        if ignore_tls { self.insecure.clone() } else { self.verified.clone() }
+        if ignore_tls {
+            self.insecure.clone()
+        } else {
+            self.verified.clone()
+        }
     }
 
     pub fn with_roots(roots: RootCertStore) -> Self {
@@ -54,12 +60,17 @@ impl TlsConfigs {
             .with_no_client_auth();
         insecure.alpn_protocols = vec![b"http/1.1".to_vec()];
 
-        Self { verified: Arc::new(verified), insecure: Arc::new(insecure) }
+        Self {
+            verified: Arc::new(verified),
+            insecure: Arc::new(insecure),
+        }
     }
 }
 
 fn default_roots() -> RootCertStore {
-    let mut roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+    let mut roots = RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
     for cert in rustls_native_certs::load_native_certs().certs {
         let _ = roots.add(cert);
     }
@@ -87,7 +98,12 @@ impl ServerCertVerifier for NoVerify {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -96,7 +112,12 @@ impl ServerCertVerifier for NoVerify {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -211,7 +232,12 @@ struct Progress {
 
 impl Progress {
     fn fail(&self, message: impl Into<String>) -> HttpError {
-        HttpError { phase: self.phase, message: message.into(), timings: self.timings.clone(), remote_ip: self.remote_ip }
+        HttpError {
+            phase: self.phase,
+            message: message.into(),
+            timings: self.timings.clone(),
+            remote_ip: self.remote_ip,
+        }
     }
 }
 
@@ -222,7 +248,12 @@ fn ms(since: Instant) -> f64 {
 pub async fn send(spec: &RequestSpec) -> Result<Response, HttpError> {
     let started = Instant::now();
     let deadline = started + spec.timeout;
-    let mut progress = Progress { phase: Phase::Dns, timings: Timings::default(), remote_ip: None, notes: Vec::new() };
+    let mut progress = Progress {
+        phase: Phase::Dns,
+        timings: Timings::default(),
+        remote_ip: None,
+        notes: Vec::new(),
+    };
     let result = tokio::time::timeout(spec.timeout, run(spec, deadline, &mut progress)).await;
     match result {
         Ok(Ok(mut r)) => {
@@ -234,7 +265,10 @@ pub async fn send(spec: &RequestSpec) -> Result<Response, HttpError> {
             Err(e)
         }
         Err(_) => {
-            let mut e = progress.fail(format!("timed out after {:.1}s", spec.timeout.as_secs_f64()));
+            let mut e = progress.fail(format!(
+                "timed out after {:.1}s",
+                spec.timeout.as_secs_f64()
+            ));
             e.timings.total_ms = Some(ms(started));
             if !progress.notes.is_empty() {
                 e.message = format!("{} ({})", e.message, progress.notes.join("; "));
@@ -244,14 +278,22 @@ pub async fn send(spec: &RequestSpec) -> Result<Response, HttpError> {
     }
 }
 
-async fn run(spec: &RequestSpec, deadline: Instant, p: &mut Progress) -> Result<Response, HttpError> {
+async fn run(
+    spec: &RequestSpec,
+    deadline: Instant,
+    p: &mut Progress,
+) -> Result<Response, HttpError> {
     let mut url = spec.url.clone();
     let mut method = spec.method.clone();
     let mut body = spec.body.clone();
     let mut hops = 0;
     loop {
         let mut resp = one_request(&url, &method, &body, spec, deadline, p).await?;
-        let location = resp.headers.get(LOCATION).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let location = resp
+            .headers
+            .get(LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let is_redirect = matches!(resp.status, 301 | 302 | 303 | 307 | 308);
         match location {
             Some(loc) if is_redirect && spec.max_redirects > 0 => {
@@ -259,8 +301,12 @@ async fn run(spec: &RequestSpec, deadline: Instant, p: &mut Progress) -> Result<
                 if hops > spec.max_redirects {
                     return Err(p.fail(format!("too many redirects (> {})", spec.max_redirects)));
                 }
-                url = url.join(&loc).map_err(|e| p.fail(format!("invalid redirect location {loc:?}: {e}")))?;
-                if resp.status == 303 || (matches!(resp.status, 301 | 302) && method != Method::HEAD) {
+                url = url
+                    .join(&loc)
+                    .map_err(|e| p.fail(format!("invalid redirect location {loc:?}: {e}")))?;
+                if resp.status == 303
+                    || (matches!(resp.status, 301 | 302) && method != Method::HEAD)
+                {
                     method = Method::GET;
                     body = Bytes::new();
                 }
@@ -278,11 +324,21 @@ pub async fn resolve(host: &str, port: u16, family: IpFamily) -> Result<Vec<Sock
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = bare.parse::<IpAddr>() {
         if !family.allows(&ip) {
-            return Err(format!("{ip} is not an {} address", if family == IpFamily::V4 { "IPv4" } else { "IPv6" }));
+            return Err(format!(
+                "{ip} is not an {} address",
+                if family == IpFamily::V4 {
+                    "IPv4"
+                } else {
+                    "IPv6"
+                }
+            ));
         }
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
-    let all: Vec<SocketAddr> = tokio::net::lookup_host((bare, port)).await.map_err(|e| format!("cannot resolve {bare}: {e}"))?.collect();
+    let all: Vec<SocketAddr> = tokio::net::lookup_host((bare, port))
+        .await
+        .map_err(|e| format!("cannot resolve {bare}: {e}"))?
+        .collect();
     let mut out: Vec<SocketAddr> = Vec::new();
     for a in all.into_iter().filter(|a| family.allows(&a.ip())) {
         if !out.contains(&a) {
@@ -305,7 +361,11 @@ fn family_label(ip: &IpAddr) -> &'static str {
 
 /// Tries each address in order; earlier attempts get part of the budget so a dead IPv6 path
 /// still leaves time for IPv4.
-pub async fn connect_any(addrs: &[SocketAddr], deadline: Instant, notes: &mut Vec<String>) -> Result<(TcpStream, SocketAddr), String> {
+pub async fn connect_any(
+    addrs: &[SocketAddr],
+    deadline: Instant,
+    notes: &mut Vec<String>,
+) -> Result<(TcpStream, SocketAddr), String> {
     let mut last_err = String::from("no addresses to connect to");
     for (i, addr) in addrs.iter().enumerate() {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -320,8 +380,22 @@ pub async fn connect_any(addrs: &[SocketAddr], deadline: Instant, notes: &mut Ve
                 let _ = s.set_nodelay(true);
                 return Ok((s, *addr));
             }
-            Ok(Err(e)) => last_err = format!("{} {} failed: {}", family_label(&addr.ip()), addr.ip(), io_error_text(&e)),
-            Err(_) => last_err = format!("{} {} timed out after {:.1}s", family_label(&addr.ip()), addr.ip(), budget.as_secs_f64()),
+            Ok(Err(e)) => {
+                last_err = format!(
+                    "{} {} failed: {}",
+                    family_label(&addr.ip()),
+                    addr.ip(),
+                    io_error_text(&e)
+                )
+            }
+            Err(_) => {
+                last_err = format!(
+                    "{} {} timed out after {:.1}s",
+                    family_label(&addr.ip()),
+                    addr.ip(),
+                    budget.as_secs_f64()
+                )
+            }
         }
         if i + 1 < addrs.len() {
             notes.push(last_err.clone());
@@ -365,16 +439,26 @@ async fn one_request(
         s => return Err(p.fail(format!("unsupported scheme {s}"))),
     };
     let host = url.host().ok_or_else(|| p.fail("URL has no host"))?;
-    let port = url.port_or_known_default().unwrap_or(if https { 443 } else { 80 });
+    let port = url
+        .port_or_known_default()
+        .unwrap_or(if https { 443 } else { 80 });
     let host_str = url.host_str().unwrap_or_default().to_string();
 
     let t = Instant::now();
-    let addrs = resolve(&host_str, port, spec.ip_family).await.map_err(|e| p.fail(e))?;
-    p.timings.dns_ms = Some(if matches!(host, Host::Domain(_)) { ms(t) } else { 0.0 });
+    let addrs = resolve(&host_str, port, spec.ip_family)
+        .await
+        .map_err(|e| p.fail(e))?;
+    p.timings.dns_ms = Some(if matches!(host, Host::Domain(_)) {
+        ms(t)
+    } else {
+        0.0
+    });
 
     p.phase = Phase::Connect;
     let t = Instant::now();
-    let (tcp, addr) = connect_any(&addrs, deadline, &mut p.notes).await.map_err(|e| p.fail(e))?;
+    let (tcp, addr) = connect_any(&addrs, deadline, &mut p.notes)
+        .await
+        .map_err(|e| p.fail(e))?;
     p.timings.connect_ms = Some(ms(t));
     p.remote_ip = Some(addr.ip());
 
@@ -383,7 +467,10 @@ async fn one_request(
         Some(port) => format!("{host_str}:{port}"),
         None => host_str.clone(),
     };
-    headers.insert(HOST, HeaderValue::from_str(&host_header).map_err(|_| p.fail("invalid host"))?);
+    headers.insert(
+        HOST,
+        HeaderValue::from_str(&host_header).map_err(|_| p.fail("invalid host"))?,
+    );
     headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
     headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
     headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
@@ -408,15 +495,29 @@ async fn one_request(
     if https {
         p.phase = Phase::Tls;
         let t = Instant::now();
-        let cfg = if spec.ignore_tls { &TlsConfigs::shared().insecure } else { &TlsConfigs::shared().verified };
+        let cfg = if spec.ignore_tls {
+            &TlsConfigs::shared().insecure
+        } else {
+            &TlsConfigs::shared().verified
+        };
         let server_name = match host {
-            Host::Domain(d) => ServerName::try_from(d.to_string()).map_err(|_| p.fail("invalid server name"))?,
+            Host::Domain(d) => {
+                ServerName::try_from(d.to_string()).map_err(|_| p.fail("invalid server name"))?
+            }
             Host::Ipv4(ip) => ServerName::IpAddress(IpAddr::V4(ip).into()),
             Host::Ipv6(ip) => ServerName::IpAddress(IpAddr::V6(ip).into()),
         };
-        let tls = TlsConnector::from(cfg.clone()).connect(server_name, tcp).await.map_err(|e| p.fail(tls_error_text(&e)))?;
+        let tls = TlsConnector::from(cfg.clone())
+            .connect(server_name, tcp)
+            .await
+            .map_err(|e| p.fail(tls_error_text(&e)))?;
         p.timings.tls_ms = Some(ms(t));
-        let cert_expires_at = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).and_then(|c| cert_not_after(c));
+        let cert_expires_at = tls
+            .get_ref()
+            .1
+            .peer_certificates()
+            .and_then(|c| c.first())
+            .and_then(|c| cert_not_after(c));
         let mut r = exchange(TokioIo::new(tls), req, spec, p).await?;
         r.cert_expires_at = cert_expires_at;
         r.url = url.clone();
@@ -428,17 +529,27 @@ async fn one_request(
     }
 }
 
-async fn exchange<T>(io: TokioIo<T>, req: Request<Full<Bytes>>, spec: &RequestSpec, p: &mut Progress) -> Result<Response, HttpError>
+async fn exchange<T>(
+    io: TokioIo<T>,
+    req: Request<Full<Bytes>>,
+    spec: &RequestSpec,
+    p: &mut Progress,
+) -> Result<Response, HttpError>
 where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     p.phase = Phase::Request;
     let t = Instant::now();
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await.map_err(|e| p.fail(e.to_string()))?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| p.fail(e.to_string()))?;
     let _conn = AbortOnDrop(tokio::spawn(async move {
         let _ = conn.await;
     }));
-    let resp = sender.send_request(req).await.map_err(|e| p.fail(hyper_error_text(&e)))?;
+    let resp = sender
+        .send_request(req)
+        .await
+        .map_err(|e| p.fail(hyper_error_text(&e)))?;
     p.timings.ttfb_ms = Some(ms(t));
 
     p.phase = Phase::Response;
@@ -477,7 +588,10 @@ pub fn cert_not_after(der: &CertificateDer<'_>) -> Option<i64> {
 }
 
 pub fn tls_error_text(e: &std::io::Error) -> String {
-    match e.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
+    match e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+    {
         Some(rustls::Error::InvalidCertificate(c)) => format!("invalid certificate: {c:?}"),
         Some(other) => other.to_string(),
         None => io_error_text(e),

@@ -6,7 +6,10 @@ pub fn days_left(expires_at: i64, now: i64) -> i64 {
 
 /// Alert steps: the configured window, then 7, 3 and 1 days before expiry.
 pub fn thresholds(warn_days: i64) -> Vec<i64> {
-    let mut t: Vec<i64> = [warn_days, 7, 3, 1].into_iter().filter(|d| *d >= 1 && *d <= warn_days).collect();
+    let mut t: Vec<i64> = [warn_days, 7, 3, 1]
+        .into_iter()
+        .filter(|d| *d >= 1 && *d <= warn_days)
+        .collect();
     t.sort_unstable_by(|a, b| b.cmp(a));
     t.dedup();
     t
@@ -25,8 +28,15 @@ pub fn warning_due(
         return None;
     }
     let left = days_left(expires_at, now);
-    let crossed = thresholds(warn_days).into_iter().filter(|t| left < *t).min()?;
-    let last = if last_notified_expiry == Some(expires_at) { last_notified_days } else { None };
+    let crossed = thresholds(warn_days)
+        .into_iter()
+        .filter(|t| left < *t)
+        .min()?;
+    let last = if last_notified_expiry == Some(expires_at) {
+        last_notified_days
+    } else {
+        None
+    };
     match last {
         Some(l) if l <= crossed => None,
         _ => Some(crossed),
@@ -61,16 +71,26 @@ mod tests {
     fn each_threshold_alerts_once() {
         let e = exp(13.5);
         assert_eq!(warning_due(14, e, NOW, None, None), Some(14));
-        assert_eq!(warning_due(14, e, NOW, Some(14), Some(e)), None, "same step must not repeat");
+        assert_eq!(
+            warning_due(14, e, NOW, Some(14), Some(e)),
+            None,
+            "same step must not repeat"
+        );
         let later = NOW + 7 * DAY_MS;
         assert_eq!(warning_due(14, e, later, Some(14), Some(e)), Some(7));
-        assert_eq!(warning_due(14, e, later + 4 * DAY_MS, Some(7), Some(e)), Some(3));
+        assert_eq!(
+            warning_due(14, e, later + 4 * DAY_MS, Some(7), Some(e)),
+            Some(3)
+        );
     }
 
     #[test]
     fn jumping_past_several_steps_alerts_for_the_most_urgent() {
         assert_eq!(warning_due(14, exp(2.5), NOW, None, None), Some(3));
-        assert_eq!(warning_due(14, exp(0.5), NOW, Some(14), Some(exp(0.5))), Some(1));
+        assert_eq!(
+            warning_due(14, exp(0.5), NOW, Some(14), Some(exp(0.5))),
+            Some(1)
+        );
     }
 
     #[test]
@@ -82,6 +102,9 @@ mod tests {
 
     #[test]
     fn expired_certificate_still_warns() {
-        assert_eq!(warning_due(14, exp(-2.0), NOW, Some(3), Some(exp(-2.0))), Some(1));
+        assert_eq!(
+            warning_due(14, exp(-2.0), NOW, Some(3), Some(exp(-2.0))),
+            Some(1)
+        );
     }
 }

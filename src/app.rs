@@ -23,13 +23,18 @@ pub struct Branding {
 
 impl Default for Branding {
     fn default() -> Self {
-        Self { site_name: "anpi".into(), logo_version: None }
+        Self {
+            site_name: "anpi".into(),
+            logo_version: None,
+        }
     }
 }
 
 impl Branding {
     pub async fn load(db: &Db) -> sqlx::Result<Self> {
-        let site_name = store::settings::get(db, "site_name").await?.filter(|s| !s.trim().is_empty());
+        let site_name = store::settings::get(db, "site_name")
+            .await?
+            .filter(|s| !s.trim().is_empty());
         Ok(Self {
             site_name: site_name.unwrap_or_else(|| Self::default().site_name),
             logo_version: store::assets::version(db, LOGO_KEY).await?,

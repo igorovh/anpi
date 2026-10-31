@@ -37,14 +37,23 @@ pub fn sniff_image(data: &[u8]) -> Option<&'static str> {
 }
 
 pub async fn logo(State(st): State<AppState>) -> AppResult<Response> {
-    let asset = store::assets::get(st.db(), LOGO_KEY).await?.ok_or_else(AppError::not_found)?;
-    let content_type = HeaderValue::from_str(&asset.content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+    let asset = store::assets::get(st.db(), LOGO_KEY)
+        .await?
+        .ok_or_else(AppError::not_found)?;
+    let content_type = HeaderValue::from_str(&asset.content_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
     Ok((
         [
             (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable")),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ),
             // Uploaded SVG must never run scripts, even when opened directly.
-            (header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox")),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+            ),
         ],
         asset.data,
     )
@@ -66,7 +75,11 @@ pub fn validate_site_name(name: &str) -> Result<String, String> {
     Ok(n.to_string())
 }
 
-pub async fn save_site_name(State(st): State<AppState>, user: CurrentUser, Form(f): Form<SiteNameForm>) -> AppResult<Response> {
+pub async fn save_site_name(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<SiteNameForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let name = validate_site_name(&f.site_name).map_err(AppError::bad_request)?;
     store::settings::set(st.db(), "site_name", &name).await?;
@@ -74,28 +87,56 @@ pub async fn save_site_name(State(st): State<AppState>, user: CurrentUser, Form(
     Ok(Redirect::to("/admin/settings?notice=saved").into_response())
 }
 
-pub async fn upload_logo(State(st): State<AppState>, user: CurrentUser, mut form: Multipart) -> AppResult<Response> {
+pub async fn upload_logo(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    mut form: Multipart,
+) -> AppResult<Response> {
     let mut csrf = String::new();
     let mut data: Option<Vec<u8>> = None;
-    while let Some(field) = form.next_field().await.map_err(|e| AppError::bad_request(e.to_string()))? {
+    while let Some(field) = form
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(e.to_string()))?
+    {
         match field.name() {
-            Some("csrf") => csrf = field.text().await.map_err(|e| AppError::bad_request(e.to_string()))?,
-            Some("logo") => data = Some(field.bytes().await.map_err(|_| AppError::bad_request("Logo is too large (max 512 KB)"))?.to_vec()),
+            Some("csrf") => {
+                csrf = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::bad_request(e.to_string()))?
+            }
+            Some("logo") => {
+                data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|_| AppError::bad_request("Logo is too large (max 512 KB)"))?
+                        .to_vec(),
+                )
+            }
             _ => {}
         }
     }
     user.check_csrf(&csrf)?;
-    let data = data.filter(|d| !d.is_empty()).ok_or_else(|| AppError::bad_request("Choose an image file"))?;
+    let data = data
+        .filter(|d| !d.is_empty())
+        .ok_or_else(|| AppError::bad_request("Choose an image file"))?;
     if data.len() > MAX_LOGO_BYTES {
         return Err(AppError::bad_request("Logo is too large (max 512 KB)"));
     }
-    let content_type = sniff_image(&data).ok_or_else(|| AppError::bad_request("Use a PNG, JPEG, WebP, GIF, ICO or SVG image"))?;
+    let content_type = sniff_image(&data)
+        .ok_or_else(|| AppError::bad_request("Use a PNG, JPEG, WebP, GIF, ICO or SVG image"))?;
     store::assets::put(st.db(), LOGO_KEY, content_type, &data).await?;
     st.ctx.reload_branding().await?;
     Ok(Redirect::to("/admin/settings?notice=saved").into_response())
 }
 
-pub async fn delete_logo(State(st): State<AppState>, user: CurrentUser, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_logo(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::assets::delete(st.db(), LOGO_KEY).await?;
     st.ctx.reload_branding().await?;
@@ -123,27 +164,47 @@ fn validate_group(f: &GroupForm, default_order: i64) -> AppResult<(String, i64)>
     let name = validate_group_name(&f.name).map_err(AppError::bad_request)?;
     let order = match f.sort_order.trim() {
         "" => default_order,
-        o => o.parse().map_err(|_| AppError::bad_request("Order must be a number"))?,
+        o => o
+            .parse()
+            .map_err(|_| AppError::bad_request("Order must be a number"))?,
     };
     Ok((name, order))
 }
 
-pub async fn create_group(State(st): State<AppState>, user: CurrentUser, Form(f): Form<GroupForm>) -> AppResult<Response> {
+pub async fn create_group(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<GroupForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let (name, order) = validate_group(&f, store::groups::next_sort_order(st.db()).await?)?;
     store::groups::create(st.db(), &name, order).await?;
-    let back = if f.next == "/admin" { "/admin?notice=created" } else { "/admin/settings?notice=created#groups" };
+    let back = if f.next == "/admin" {
+        "/admin?notice=created"
+    } else {
+        "/admin/settings?notice=created#groups"
+    };
     Ok(Redirect::to(back).into_response())
 }
 
-pub async fn update_group(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<GroupForm>) -> AppResult<Response> {
+pub async fn update_group(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<GroupForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let (name, order) = validate_group(&f, 0)?;
     store::groups::update(st.db(), id, &name, order).await?;
     Ok(Redirect::to("/admin/settings?notice=saved#groups").into_response())
 }
 
-pub async fn delete_group(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_group(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     store::groups::delete(st.db(), id).await?;
     Ok(Redirect::to("/admin/settings?notice=deleted#groups").into_response())
@@ -157,9 +218,18 @@ mod tests {
     fn image_types_are_detected_from_content() {
         assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\nrest"), Some("image/png"));
         assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
-        assert_eq!(sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 "), Some("image/webp"));
-        assert_eq!(sniff_image(b"  <svg xmlns='http://www.w3.org/2000/svg'/>"), Some("image/svg+xml"));
-        assert_eq!(sniff_image(b"<?xml version='1.0'?><svg/>"), Some("image/svg+xml"));
+        assert_eq!(
+            sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(
+            sniff_image(b"  <svg xmlns='http://www.w3.org/2000/svg'/>"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            sniff_image(b"<?xml version='1.0'?><svg/>"),
+            Some("image/svg+xml")
+        );
         assert_eq!(sniff_image(b"<html><script>alert(1)</script>"), None);
         assert_eq!(sniff_image(b"<?xml version='1.0'?><html/>"), None);
         assert_eq!(sniff_image(b"MZ\x90\x00"), None, "executables are rejected");
@@ -167,7 +237,10 @@ mod tests {
 
     #[test]
     fn site_name_is_trimmed_and_bounded() {
-        assert_eq!(validate_site_name("  igorovh status ").unwrap(), "igorovh status");
+        assert_eq!(
+            validate_site_name("  igorovh status ").unwrap(),
+            "igorovh status"
+        );
         assert!(validate_site_name("   ").is_err());
         assert!(validate_site_name(&"x".repeat(41)).is_err());
     }

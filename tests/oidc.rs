@@ -26,15 +26,36 @@ struct Idp {
 type Shared = Arc<Mutex<Idp>>;
 
 fn jwt(claims: Value) -> String {
-    format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256"}"#), URL_SAFE_NO_PAD.encode(claims.to_string()))
+    format!(
+        "{}.{}.sig",
+        URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256"}"#),
+        URL_SAFE_NO_PAD.encode(claims.to_string())
+    )
 }
 
-async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(f): Form<HashMap<String, String>>) -> (StatusCode, Json<Value>) {
+async fn token(
+    State(idp): State<Shared>,
+    headers: HeaderMap,
+    Form(f): Form<HashMap<String, String>>,
+) -> (StatusCode, Json<Value>) {
     let idp = idp.lock().unwrap();
-    let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default();
-    let pkce_ok = f.get("code_verifier").is_some_and(|v| anpi::util::sha256_b64url(v) == idp.challenge);
-    if auth != format!("Basic {}", STANDARD.encode("anpi:s3cret")) || f.get("code").map(String::as_str) != Some("good-code") || !pkce_ok {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_grant", "error_description": "bad code, verifier or client" })));
+    let auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let pkce_ok = f
+        .get("code_verifier")
+        .is_some_and(|v| anpi::util::sha256_b64url(v) == idp.challenge);
+    if auth != format!("Basic {}", STANDARD.encode("anpi:s3cret"))
+        || f.get("code").map(String::as_str) != Some("good-code")
+        || !pkce_ok
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "invalid_grant", "error_description": "bad code, verifier or client" }),
+            ),
+        );
     }
     let now = anpi::util::now_ms() / 1000;
     let id_token = jwt(json!({
@@ -42,7 +63,10 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(f): Form<Hash
         "nonce": idp.nonce_override.clone().unwrap_or(idp.nonce.clone()), "preferred_username": "igor",
     }));
     let access_token = jwt(json!({ "realm_access": { "roles": idp.roles } }));
-    (StatusCode::OK, Json(json!({ "id_token": id_token, "access_token": access_token, "token_type": "Bearer" })))
+    (
+        StatusCode::OK,
+        Json(json!({ "id_token": id_token, "access_token": access_token, "token_type": "Bearer" })),
+    )
 }
 
 async fn start_idp() -> (String, Shared) {
@@ -83,7 +107,12 @@ async fn sso_app(issuer: &str, role: Option<&str>) -> anpi::App {
 
 /// Starts a login and returns the query of the provider redirect, like a browser following it.
 async fn begin(c: &mut Client, idp: &Shared, next: &str) -> HashMap<String, String> {
-    let r = c.get(&format!("/auth/oidc/login?next={}", urlencoding::encode(next))).await;
+    let r = c
+        .get(&format!(
+            "/auth/oidc/login?next={}",
+            urlencoding::encode(next)
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER);
     let url = url::Url::parse(&r.location()).unwrap();
     assert!(url.path().ends_with("/auth"));
@@ -105,7 +134,12 @@ async fn full_sign_in_and_sign_out() {
     assert_eq!(q["code_challenge_method"], "S256");
     assert_eq!(q["response_type"], "code");
 
-    let r = c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = c
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
     assert_eq!(r.location(), "/admin/settings");
     let page = c.get("/admin").await;
@@ -114,12 +148,20 @@ async fn full_sign_in_and_sign_out() {
 
     // A second login maps to the same account instead of creating a duplicate.
     let q = begin(&mut c, &idp, "/admin").await;
-    c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    c.get(&format!(
+        "/auth/oidc/callback?code=good-code&state={}",
+        q["state"]
+    ))
+    .await;
     assert_eq!(anpi::store::users::count(&app.ctx.db).await.unwrap(), 1);
 
     let csrf = c.csrf().await;
     let out = c.post("/logout", &[("csrf", &csrf)]).await;
-    assert!(out.location().starts_with(&format!("{issuer}/logout?")), "{}", out.location());
+    assert!(
+        out.location().starts_with(&format!("{issuer}/logout?")),
+        "{}",
+        out.location()
+    );
     assert!(out.location().contains("id_token_hint="));
     assert_eq!(c.get("/admin").await.status, StatusCode::SEE_OTHER);
 }
@@ -132,7 +174,12 @@ async fn callback_must_come_from_the_browser_that_started_it() {
     let mut attacker = Client::new(anpi::web::router(app.state.clone()));
 
     let q = begin(&mut attacker, &idp, "/admin").await;
-    let r = victim.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = victim
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert!(!victim.cookies.contains_key(anpi::web::SESSION_COOKIE));
 }
@@ -146,41 +193,82 @@ async fn replayed_nonce_and_missing_role_are_rejected() {
     idp.lock().unwrap().roles = vec!["monitoring".into()];
     idp.lock().unwrap().nonce_override = Some("stale".into());
     let q = begin(&mut c, &idp, "/admin").await;
-    let r = c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = c
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert!(r.body.contains("nonce"), "{}", r.body);
 
     idp.lock().unwrap().nonce_override = None;
     idp.lock().unwrap().roles = vec!["offline_access".into()];
     let q = begin(&mut c, &idp, "/admin").await;
-    let r = c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = c
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert!(r.body.contains("required role"), "{}", r.body);
 
     let q = begin(&mut c, &idp, "/admin").await;
-    let r = c.get(&format!("/auth/oidc/callback?code=bad-code&state={}", q["state"])).await;
-    assert!(r.body.contains("bad code"), "provider errors are surfaced: {}", r.body);
+    let r = c
+        .get(&format!(
+            "/auth/oidc/callback?code=bad-code&state={}",
+            q["state"]
+        ))
+        .await;
+    assert!(
+        r.body.contains("bad code"),
+        "provider errors are surfaced: {}",
+        r.body
+    );
     assert_eq!(anpi::store::users::count(&app.ctx.db).await.unwrap(), 0);
 
     idp.lock().unwrap().roles = vec!["monitoring".into()];
     let q = begin(&mut c, &idp, "/admin").await;
-    let r = c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = c
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
 
-    let reused = c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
-    assert_eq!(reused.status, StatusCode::UNAUTHORIZED, "a state can only be used once");
+    let reused = c
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
+    assert_eq!(
+        reused.status,
+        StatusCode::UNAUTHORIZED,
+        "a state can only be used once"
+    );
 }
 
 #[tokio::test]
 async fn sso_mode_disables_local_accounts() {
     let (issuer, _) = start_idp().await;
     let app = sso_app(&issuer, None).await;
-    assert!(app.state.setup_code.lock().unwrap().is_none(), "no setup code in SSO mode");
+    assert!(
+        app.state.setup_code.lock().unwrap().is_none(),
+        "no setup code in SSO mode"
+    );
     let mut c = Client::new(anpi::web::router(app.state.clone()));
 
     let login = c.get("/login").await;
     assert!(login.body.contains("Continue with SSO") && !login.body.contains("type=\"password\""));
-    assert_eq!(c.post("/login", &[("username", "a"), ("password", "b")]).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        c.post("/login", &[("username", "a"), ("password", "b")])
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
     assert_eq!(c.get("/setup").await.location(), "/login");
 }
 
@@ -191,51 +279,132 @@ async fn sso_can_be_enabled_from_the_panel_and_disabled_from_the_cli() {
     let mut admin = common::signed_in(&app).await;
     let csrf = admin.csrf().await;
     let form = |iss: &str, enabled: bool| {
-        let mut f = vec![("csrf", csrf.clone()), ("base_url", "http://localhost/".into()), ("issuer", iss.into()),
-                         ("client_id", "anpi".into()), ("client_secret", "s3cret".into())];
+        let mut f = vec![
+            ("csrf", csrf.clone()),
+            ("base_url", "http://localhost/".into()),
+            ("issuer", iss.into()),
+            ("client_id", "anpi".into()),
+            ("client_secret", "s3cret".into()),
+        ];
         if enabled {
             f.push(("enabled", "on".into()));
         }
         f
     };
-    let post = |f: &Vec<(&'static str, String)>| f.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>();
+    let post = |f: &Vec<(&'static str, String)>| {
+        f.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>()
+    };
 
     // A provider that does not answer must never switch passwords off.
     let dead = post(&form("http://127.0.0.1:9/realms/x", true));
-    let r = admin.post("/admin/sso", &dead.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    let r = admin
+        .post(
+            "/admin/sso",
+            &dead
+                .iter()
+                .map(|(k, v)| (*k, v.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert!(r.body.contains("could not be reached"), "{}", r.body);
     assert!(app.state.oidc().is_none());
 
     let test = post(&form(&issuer, false));
-    let r = admin.post("/admin/sso/test", &test.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    let r = admin
+        .post(
+            "/admin/sso/test",
+            &test
+                .iter()
+                .map(|(k, v)| (*k, v.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .await;
     assert!(r.body.contains(r#""ok":true"#), "{}", r.body);
 
     let on = post(&form(&issuer, true));
-    let r = admin.post("/admin/sso", &on.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
+    let r = admin
+        .post(
+            "/admin/sso",
+            &on.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>(),
+        )
+        .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
     assert!(app.state.oidc().is_some(), "applies without a restart");
-    assert!(admin.get("/admin/settings").await.body.contains("becomes an admin here"), "SSO without a required role is called out");
-    assert!(admin.get("/admin").await.status.is_success(), "the admin who enabled it stays signed in");
+    assert!(
+        admin
+            .get("/admin/settings")
+            .await
+            .body
+            .contains("becomes an admin here"),
+        "SSO without a required role is called out"
+    );
+    assert!(
+        admin.get("/admin").await.status.is_success(),
+        "the admin who enabled it stays signed in"
+    );
 
     let mut visitor = Client::new(anpi::web::router(app.state.clone()));
-    assert!(visitor.get("/login").await.body.contains("Continue with SSO"));
-    assert_eq!(visitor.post("/login", &[("username", "admin"), ("password", "a-long-password")]).await.status, StatusCode::NOT_FOUND);
+    assert!(
+        visitor
+            .get("/login")
+            .await
+            .body
+            .contains("Continue with SSO")
+    );
+    assert_eq!(
+        visitor
+            .post(
+                "/login",
+                &[("username", "admin"), ("password", "a-long-password")]
+            )
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
     let q = begin(&mut visitor, &idp, "/admin").await;
     assert_eq!(q["redirect_uri"], "http://localhost/auth/oidc/callback");
-    let r = visitor.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    let r = visitor
+        .get(&format!(
+            "/auth/oidc/callback?code=good-code&state={}",
+            q["state"]
+        ))
+        .await;
     assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
 
     // The stored secret is kept when the form leaves it empty.
     let mut keep = post(&form(&issuer, true));
     keep.retain(|(k, _)| *k != "client_secret");
-    admin.post("/admin/sso", &keep.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>()).await;
-    assert_eq!(anpi::auth::sso::PanelSso::load(&app.ctx.db).await.unwrap().client_secret, "s3cret");
+    admin
+        .post(
+            "/admin/sso",
+            &keep
+                .iter()
+                .map(|(k, v)| (*k, v.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .await;
+    assert_eq!(
+        anpi::auth::sso::PanelSso::load(&app.ctx.db)
+            .await
+            .unwrap()
+            .client_secret,
+        "s3cret"
+    );
 
     anpi::auth::sso::disable(&app.ctx.db).await.unwrap();
     app.ctx.reload_auth().await.unwrap();
-    let back = Client::new(anpi::web::router(app.state.clone())).post("/login", &[("username", "admin"), ("password", "a-long-password")]).await;
-    assert_eq!(back.status, StatusCode::SEE_OTHER, "passwords work again after disable-sso");
+    let back = Client::new(anpi::web::router(app.state.clone()))
+        .post(
+            "/login",
+            &[("username", "admin"), ("password", "a-long-password")],
+        )
+        .await;
+    assert_eq!(
+        back.status,
+        StatusCode::SEE_OTHER,
+        "passwords work again after disable-sso"
+    );
 }
 
 #[tokio::test]
@@ -244,10 +413,23 @@ async fn environment_sso_cannot_be_changed_from_the_panel() {
     let app = sso_app(&issuer, None).await;
     let mut c = Client::new(anpi::web::router(app.state.clone()));
     let q = begin(&mut c, &idp, "/admin").await;
-    c.get(&format!("/auth/oidc/callback?code=good-code&state={}", q["state"])).await;
+    c.get(&format!(
+        "/auth/oidc/callback?code=good-code&state={}",
+        q["state"]
+    ))
+    .await;
     let csrf = c.csrf().await;
     let page = c.get("/admin/settings").await.body;
     assert!(page.contains("environment variables"));
-    let r = c.post("/admin/sso", &[("csrf", &csrf), ("issuer", "https://other"), ("client_id", "x")]).await;
+    let r = c
+        .post(
+            "/admin/sso",
+            &[
+                ("csrf", &csrf),
+                ("issuer", "https://other"),
+                ("client_id", "x"),
+            ],
+        )
+        .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
 }

@@ -16,9 +16,13 @@ use status_codes::StatusMatcher;
 pub fn parse_headers(raw: &str) -> Result<Vec<(HeaderName, HeaderValue)>, String> {
     let mut out = Vec::new();
     for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let (k, v) = line.split_once(':').ok_or_else(|| format!("header line {line:?} must look like 'Name: value'"))?;
-        let name = HeaderName::from_bytes(k.trim().as_bytes()).map_err(|_| format!("invalid header name {:?}", k.trim()))?;
-        let value = HeaderValue::from_str(v.trim()).map_err(|_| format!("invalid value for header {name}"))?;
+        let (k, v) = line
+            .split_once(':')
+            .ok_or_else(|| format!("header line {line:?} must look like 'Name: value'"))?;
+        let name = HeaderName::from_bytes(k.trim().as_bytes())
+            .map_err(|_| format!("invalid header name {:?}", k.trim()))?;
+        let value = HeaderValue::from_str(v.trim())
+            .map_err(|_| format!("invalid value for header {name}"))?;
         out.push((name, value));
     }
     Ok(out)
@@ -28,9 +32,26 @@ pub async fn run(m: &Monitor) -> CheckOutcome {
     let timeout = Duration::from_secs(m.timeout_s.clamp(1, 300) as u64);
     match m.kind() {
         MonitorKind::Http => http_check(m, timeout).await,
-        MonitorKind::Tcp => tcp::check(&m.target, m.port.unwrap_or(0) as u16, m.ip_family(), timeout).await,
+        MonitorKind::Tcp => {
+            tcp::check(
+                &m.target,
+                m.port.unwrap_or(0) as u16,
+                m.ip_family(),
+                timeout,
+            )
+            .await
+        }
         MonitorKind::Ping => ping::check(&m.target, m.ip_family(), timeout).await,
-        MonitorKind::Dns => dns::check(&m.target, &m.dns_record_type, &m.dns_server, &m.content_expected, timeout).await,
+        MonitorKind::Dns => {
+            dns::check(
+                &m.target,
+                &m.dns_record_type,
+                &m.dns_server,
+                &m.content_expected,
+                timeout,
+            )
+            .await
+        }
         MonitorKind::Push => CheckOutcome::fail("push monitors are not actively checked"),
         MonitorKind::Aggregate => CheckOutcome::fail("aggregate monitors are not checked"),
         MonitorKind::WebSocket => {
@@ -94,11 +115,22 @@ async fn http_check(m: &Monitor, timeout: Duration) -> CheckOutcome {
                 cert_expires_at: r.cert_expires_at,
                 ..Default::default()
             };
-            let reason = ::http::StatusCode::from_u16(r.status).ok().and_then(|s| s.canonical_reason()).unwrap_or("");
+            let reason = ::http::StatusCode::from_u16(r.status)
+                .ok()
+                .and_then(|s| s.canonical_reason())
+                .unwrap_or("");
             if !matcher.matches(r.status) {
                 out.ok = false;
-                out.message = format!("HTTP {} {reason} (expected {})", r.status, m.expected_status);
-            } else if let Err(e) = content::evaluate(m.content_kind(), &m.content_value, &m.content_expected, &r.text()) {
+                out.message = format!(
+                    "HTTP {} {reason} (expected {})",
+                    r.status, m.expected_status
+                );
+            } else if let Err(e) = content::evaluate(
+                m.content_kind(),
+                &m.content_value,
+                &m.content_expected,
+                &r.text(),
+            ) {
                 out.ok = false;
                 out.message = e;
             } else {

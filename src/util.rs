@@ -8,7 +8,10 @@ pub const HOUR_MS: i64 = 3_600_000;
 pub const DAY_MS: i64 = 24 * HOUR_MS;
 
 pub fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub fn floor_hour(ms: i64) -> i64 {
@@ -36,7 +39,8 @@ pub fn format_ts(ms: i64) -> String {
     let Ok(dt) = time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000) else {
         return String::new();
     };
-    let fmt = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
+    let fmt =
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
     dt.format(&fmt).unwrap_or_default()
 }
 
@@ -99,7 +103,10 @@ mod tests {
         let b = random_token(32);
         assert_ne!(a, b);
         assert_eq!(a.len(), 43);
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]

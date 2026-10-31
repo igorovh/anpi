@@ -3,23 +3,37 @@ use crate::models::{Monitor, MonitorInput, MonitorKind};
 use crate::util::{now_ms, random_token};
 
 pub async fn list(db: &Db) -> sqlx::Result<Vec<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(db).await
+    sqlx::query_as("SELECT * FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id")
+        .fetch_all(db)
+        .await
 }
 
 pub async fn list_public(db: &Db) -> sqlx::Result<Vec<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors WHERE public = 1 ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(db).await
+    sqlx::query_as(
+        "SELECT * FROM monitors WHERE public = 1 ORDER BY sort_order, name COLLATE NOCASE, id",
+    )
+    .fetch_all(db)
+    .await
 }
 
 pub async fn list_active(db: &Db) -> sqlx::Result<Vec<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors WHERE active = 1").fetch_all(db).await
+    sqlx::query_as("SELECT * FROM monitors WHERE active = 1")
+        .fetch_all(db)
+        .await
 }
 
 pub async fn get(db: &Db, id: i64) -> sqlx::Result<Option<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors WHERE id = ?").bind(id).fetch_optional(db).await
+    sqlx::query_as("SELECT * FROM monitors WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await
 }
 
 pub async fn get_by_push_token(db: &Db, token: &str) -> sqlx::Result<Option<Monitor>> {
-    sqlx::query_as("SELECT * FROM monitors WHERE push_token = ?").bind(token).fetch_optional(db).await
+    sqlx::query_as("SELECT * FROM monitors WHERE push_token = ?")
+        .bind(token)
+        .fetch_optional(db)
+        .await
 }
 
 pub async fn create(db: &Db, m: &MonitorInput) -> sqlx::Result<i64> {
@@ -123,11 +137,19 @@ pub async fn set_active(db: &Db, id: i64, active: bool) -> sqlx::Result<()> {
 }
 
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
-    sqlx::query("DELETE FROM monitors WHERE id = ?").bind(id).execute(db).await?;
+    sqlx::query("DELETE FROM monitors WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
-pub async fn set_ssl_notified(db: &Db, id: i64, days: Option<i64>, expiry: Option<i64>) -> sqlx::Result<()> {
+pub async fn set_ssl_notified(
+    db: &Db,
+    id: i64,
+    days: Option<i64>,
+    expiry: Option<i64>,
+) -> sqlx::Result<()> {
     sqlx::query("UPDATE monitors SET ssl_notified_days = ?, ssl_notified_expiry = ? WHERE id = ?")
         .bind(days)
         .bind(expiry)
@@ -146,13 +168,18 @@ pub async fn channel_ids(db: &Db, monitor_id: i64) -> sqlx::Result<Vec<i64>> {
 
 pub async fn set_channels(db: &Db, monitor_id: i64, channel_ids: &[i64]) -> sqlx::Result<()> {
     let mut tx = db.begin().await?;
-    sqlx::query("DELETE FROM monitor_notifications WHERE monitor_id = ?").bind(monitor_id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM monitor_notifications WHERE monitor_id = ?")
+        .bind(monitor_id)
+        .execute(&mut *tx)
+        .await?;
     for cid in channel_ids {
-        sqlx::query("INSERT OR IGNORE INTO monitor_notifications (monitor_id, channel_id) VALUES (?, ?)")
-            .bind(monitor_id)
-            .bind(cid)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO monitor_notifications (monitor_id, channel_id) VALUES (?, ?)",
+        )
+        .bind(monitor_id)
+        .bind(cid)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await
 }
@@ -167,15 +194,30 @@ pub enum Position {
     After(i64),
 }
 
-pub async fn move_to(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i64>) -> sqlx::Result<()> {
+pub async fn move_to(
+    db: &Db,
+    id: i64,
+    group_id: Option<i64>,
+    parent_id: Option<i64>,
+) -> sqlx::Result<()> {
     place(db, id, group_id, parent_id, Position::Keep).await
 }
 
 /// Moves a monitor (and its sub-monitors' group) and renumbers the order in one transaction.
-pub async fn place(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i64>, position: Position) -> sqlx::Result<()> {
+pub async fn place(
+    db: &Db,
+    id: i64,
+    group_id: Option<i64>,
+    parent_id: Option<i64>,
+    position: Position,
+) -> sqlx::Result<()> {
     let mut tx = db.begin().await?;
     if position != Position::Keep {
-        let mut order: Vec<i64> = sqlx::query_scalar("SELECT id FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id").fetch_all(&mut *tx).await?;
+        let mut order: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM monitors ORDER BY sort_order, name COLLATE NOCASE, id",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         order.retain(|m| *m != id);
         let at = match position {
             Position::Before(a) => order.iter().position(|m| *m == a),
@@ -184,7 +226,11 @@ pub async fn place(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i6
         };
         order.insert(at.unwrap_or(order.len()), id);
         for (n, m) in order.iter().enumerate() {
-            sqlx::query("UPDATE monitors SET sort_order = ? WHERE id = ?").bind(n as i64 + 1).bind(m).execute(&mut *tx).await?;
+            sqlx::query("UPDATE monitors SET sort_order = ? WHERE id = ?")
+                .bind(n as i64 + 1)
+                .bind(m)
+                .execute(&mut *tx)
+                .await?;
         }
     }
     sqlx::query("UPDATE monitors SET group_id = ?, parent_id = ?, updated_at = ? WHERE id = ?")
@@ -194,6 +240,10 @@ pub async fn place(db: &Db, id: i64, group_id: Option<i64>, parent_id: Option<i6
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("UPDATE monitors SET group_id = ? WHERE parent_id = ?").bind(group_id).bind(id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE monitors SET group_id = ? WHERE parent_id = ?")
+        .bind(group_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await
 }

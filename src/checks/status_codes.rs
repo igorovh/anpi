@@ -10,7 +10,9 @@ impl StatusMatcher {
         for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
             let lower = part.to_ascii_lowercase();
             let range = if let Some(class) = lower.strip_suffix("xx") {
-                let d: u16 = class.parse().map_err(|_| format!("invalid status class '{part}'"))?;
+                let d: u16 = class
+                    .parse()
+                    .map_err(|_| format!("invalid status class '{part}'"))?;
                 if !(1..=5).contains(&d) {
                     return Err(format!("invalid status class '{part}'"));
                 }

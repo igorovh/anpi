@@ -39,7 +39,12 @@ pub struct Scheduler {
 impl Scheduler {
     pub fn new(ctx: Arc<Ctx>) -> Arc<Self> {
         let permits = Arc::new(Semaphore::new(ctx.config.max_concurrent_checks.max(1)));
-        Arc::new(Self { ctx, tasks: Mutex::new(HashMap::new()), push: RwLock::new(HashMap::new()), permits })
+        Arc::new(Self {
+            ctx,
+            tasks: Mutex::new(HashMap::new()),
+            push: RwLock::new(HashMap::new()),
+            permits,
+        })
     }
 
     pub async fn start_all_missing(&self) -> anyhow::Result<()> {
@@ -100,7 +105,9 @@ impl Scheduler {
             return;
         }
         // A monitor that has just started has not had the chance to check yet.
-        self.ctx.last_check.store(crate::util::now_ms(), std::sync::atomic::Ordering::Relaxed);
+        self.ctx
+            .last_check
+            .store(crate::util::now_ms(), std::sync::atomic::Ordering::Relaxed);
         let cancel = CancellationToken::new();
         let (push_rx, push_token) = match (m.kind(), &m.push_token) {
             (MonitorKind::Push, Some(token)) => {
@@ -110,8 +117,21 @@ impl Scheduler {
             }
             _ => (None, None),
         };
-        let handle = tokio::spawn(run_monitor(self.ctx.clone(), self.permits.clone(), m.clone(), cancel.clone(), push_rx));
-        self.tasks.lock().await.insert(m.id, Running { cancel, handle, push_token });
+        let handle = tokio::spawn(run_monitor(
+            self.ctx.clone(),
+            self.permits.clone(),
+            m.clone(),
+            cancel.clone(),
+            push_rx,
+        ));
+        self.tasks.lock().await.insert(
+            m.id,
+            Running {
+                cancel,
+                handle,
+                push_token,
+            },
+        );
     }
 }
 
@@ -135,7 +155,9 @@ async fn run_monitor(
     let retry_interval = Duration::from_secs(m.retry_interval_s.max(1) as u64);
 
     // Spread start-up so all monitors don't fire in the same instant.
-    let jitter = Duration::from_millis(rand::random::<u64>() % (interval.as_millis() as u64 / 10).clamp(1, 3000));
+    let jitter = Duration::from_millis(
+        rand::random::<u64>() % (interval.as_millis() as u64 / 10).clamp(1, 3000),
+    );
     tokio::select! {
         _ = cancel.cancelled() => return,
         _ = tokio::time::sleep(jitter) => {}
@@ -157,7 +179,9 @@ async fn run_monitor(
                 _ = tokio::time::sleep(interval) => CheckOutcome::fail(format!("no push received within {}s", interval.as_secs())),
             }
         } else {
-            let Ok(_permit) = permits.acquire().await else { return };
+            let Ok(_permit) = permits.acquire().await else {
+                return;
+            };
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 o = checks::run(&m) => o,
@@ -167,7 +191,11 @@ async fn run_monitor(
         let status = process(&ctx, &mut m, &mut state, outcome).await;
 
         if push_rx.is_none() {
-            let wait = if status == Status::Pending { retry_interval } else { interval };
+            let wait = if status == Status::Pending {
+                retry_interval
+            } else {
+                interval
+            };
             tokio::select! {
                 _ = cancel.cancelled() => return,
                 _ = tokio::time::sleep(wait) => {}
@@ -176,11 +204,21 @@ async fn run_monitor(
     }
 }
 
-pub(crate) async fn process(ctx: &Arc<Ctx>, m: &mut Monitor, state: &mut MonitorState, outcome: CheckOutcome) -> Status {
+pub(crate) async fn process(
+    ctx: &Arc<Ctx>,
+    m: &mut Monitor,
+    state: &mut MonitorState,
+    outcome: CheckOutcome,
+) -> Status {
     let now = now_ms();
-    ctx.last_check.store(now, std::sync::atomic::Ordering::Relaxed);
+    ctx.last_check
+        .store(now, std::sync::atomic::Ordering::Relaxed);
     let in_maintenance = ctx.maintenance.active_for(m.id, now);
-    let (status, transition) = state.apply(outcome.ok, m.failure_threshold.max(1) as u32, in_maintenance);
+    let (status, transition) = state.apply(
+        outcome.ok,
+        m.failure_threshold.max(1) as u32,
+        in_maintenance,
+    );
 
     ctx.writer
         .send(NewHeartbeat {
@@ -194,14 +232,22 @@ pub(crate) async fn process(ctx: &Arc<Ctx>, m: &mut Monitor, state: &mut Monitor
             cert_expires_at: outcome.cert_expires_at,
         })
         .await;
-    let _ = ctx.events.send(Arc::new(MonitorEvent::new(m.id, m.public, status, outcome.timings.total_ms, &outcome.message, now)));
+    let _ = ctx.events.send(Arc::new(MonitorEvent::new(
+        m.id,
+        m.public,
+        status,
+        outcome.timings.total_ms,
+        &outcome.message,
+        now,
+    )));
 
     match transition {
         Transition::None => {}
         Transition::WentDown => {
             tracing::warn!(monitor = %m.name, reason = %outcome.message, "monitor down");
             if let Ok(None) = store::heartbeats::open_incident(&ctx.db, m.id).await {
-                let _ = store::heartbeats::create_incident(&ctx.db, m.id, now, &outcome.message).await;
+                let _ =
+                    store::heartbeats::create_incident(&ctx.db, m.id, now, &outcome.message).await;
             }
             spawn_notify(ctx, m, EventKind::Down, outcome.message.clone(), now);
         }
@@ -212,32 +258,72 @@ pub(crate) async fn process(ctx: &Arc<Ctx>, m: &mut Monitor, state: &mut Monitor
                 let _ = store::heartbeats::close_incident(&ctx.db, inc.id, now).await;
                 downtime = Some(now - inc.started_at);
             }
-            spawn_notify(ctx, m, EventKind::Up { downtime_ms: downtime }, outcome.message.clone(), now);
+            spawn_notify(
+                ctx,
+                m,
+                EventKind::Up {
+                    downtime_ms: downtime,
+                },
+                outcome.message.clone(),
+                now,
+            );
         }
     }
 
     if let Some(expires_at) = outcome.cert_expires_at
-        && let Some(step) = ssl::warning_due(m.ssl_warn_days, expires_at, now, m.ssl_notified_days, m.ssl_notified_expiry)
+        && let Some(step) = ssl::warning_due(
+            m.ssl_warn_days,
+            expires_at,
+            now,
+            m.ssl_notified_days,
+            m.ssl_notified_expiry,
+        )
     {
         m.ssl_notified_days = Some(step);
         m.ssl_notified_expiry = Some(expires_at);
-        let _ = store::monitors::set_ssl_notified(&ctx.db, m.id, Some(step), Some(expires_at)).await;
+        let _ =
+            store::monitors::set_ssl_notified(&ctx.db, m.id, Some(step), Some(expires_at)).await;
         let days_left = ssl::days_left(expires_at, now);
-        spawn_notify(ctx, m, EventKind::SslExpiring { days_left, expires_at }, String::new(), now);
+        spawn_notify(
+            ctx,
+            m,
+            EventKind::SslExpiring {
+                days_left,
+                expires_at,
+            },
+            String::new(),
+            now,
+        );
     }
     status
 }
 
 fn spawn_notify(ctx: &Arc<Ctx>, m: &Monitor, kind: EventKind, message: String, at: i64) {
-    let mut ev = NotifyEvent { kind, monitor_name: m.name.clone(), parent_name: None, group_name: None, target: m.display_target(), message, at };
+    let mut ev = NotifyEvent {
+        kind,
+        monitor_name: m.name.clone(),
+        parent_name: None,
+        group_name: None,
+        target: m.display_target(),
+        message,
+        at,
+    };
     let db = ctx.db.clone();
     let (id, parent, group) = (m.id, m.parent_id, m.group_id);
     tokio::spawn(async move {
         if let Some(p) = parent {
-            ev.parent_name = store::monitors::get(&db, p).await.ok().flatten().map(|p| p.name);
+            ev.parent_name = store::monitors::get(&db, p)
+                .await
+                .ok()
+                .flatten()
+                .map(|p| p.name);
         }
         if let Some(g) = group {
-            ev.group_name = store::groups::list(&db).await.ok().and_then(|gs| gs.into_iter().find(|x| x.id == g)).map(|x| x.name);
+            ev.group_name = store::groups::list(&db)
+                .await
+                .ok()
+                .and_then(|gs| gs.into_iter().find(|x| x.id == g))
+                .map(|x| x.name);
         }
         notify::notify_monitor(&db, id, ev).await
     });

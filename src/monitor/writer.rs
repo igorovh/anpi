@@ -50,7 +50,10 @@ async fn run(db: Db, mut rx: mpsc::Receiver<Msg>) {
             if batch.len() >= 500 || !waiters.is_empty() {
                 break;
             }
-            next = tokio::time::timeout_at(deadline, rx.recv()).await.ok().flatten();
+            next = tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .ok()
+                .flatten();
         }
         if !batch.is_empty() {
             if let Err(e) = store::heartbeats::insert_batch(&db, &batch).await {

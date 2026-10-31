@@ -16,7 +16,10 @@ async fn monitor(input: MonitorInput) -> Monitor {
 }
 
 fn http(url: &str) -> MonitorInput {
-    MonitorInput { timeout_s: 2, ..MonitorInput::http("t", url) }
+    MonitorInput {
+        timeout_s: 2,
+        ..MonitorInput::http("t", url)
+    }
 }
 
 #[tokio::test]
@@ -40,9 +43,16 @@ async fn unexpected_status_fails_with_a_clear_message() {
     let out = checks::run(&monitor(http(&t.url("/"))).await).await;
     assert!(!out.ok);
     assert_eq!(out.status_code, Some(503));
-    assert!(out.message.contains("HTTP 503") && out.message.contains("expected 200-299"), "{}", out.message);
+    assert!(
+        out.message.contains("HTTP 503") && out.message.contains("expected 200-299"),
+        "{}",
+        out.message
+    );
 
-    let accepting = MonitorInput { expected_status: "200-299,503".into(), ..http(&t.url("/")) };
+    let accepting = MonitorInput {
+        expected_status: "200-299,503".into(),
+        ..http(&t.url("/"))
+    };
     assert!(checks::run(&monitor(accepting).await).await.ok);
 }
 
@@ -50,27 +60,52 @@ async fn unexpected_status_fails_with_a_clear_message() {
 async fn slow_server_times_out_and_names_the_phase() {
     let t = Target::start().await;
     t.delay_ms.store(3000, std::sync::atomic::Ordering::SeqCst);
-    let m = monitor(MonitorInput { timeout_s: 1, ..http(&t.url("/")) }).await;
+    let m = monitor(MonitorInput {
+        timeout_s: 1,
+        ..http(&t.url("/"))
+    })
+    .await;
     let started = std::time::Instant::now();
     let out = checks::run(&m).await;
-    assert!(started.elapsed() < Duration::from_millis(2500), "must not wait for the slow server");
+    assert!(
+        started.elapsed() < Duration::from_millis(2500),
+        "must not wait for the slow server"
+    );
     assert!(!out.ok);
-    assert!(out.message.starts_with("request: timed out after 1.0s"), "{}", out.message);
-    assert!(out.timings.connect_ms.is_some(), "phases reached before the timeout are kept");
+    assert!(
+        out.message.starts_with("request: timed out after 1.0s"),
+        "{}",
+        out.message
+    );
+    assert!(
+        out.timings.connect_ms.is_some(),
+        "phases reached before the timeout are kept"
+    );
 }
 
 #[tokio::test]
 async fn redirects_are_followed_only_when_enabled() {
     let t = Target::start().await;
-    assert!(checks::run(&monitor(http(&t.url("/redirect"))).await).await.ok);
+    assert!(
+        checks::run(&monitor(http(&t.url("/redirect"))).await)
+            .await
+            .ok
+    );
 
-    let no_follow = MonitorInput { follow_redirects: false, ..http(&t.url("/redirect")) };
+    let no_follow = MonitorInput {
+        follow_redirects: false,
+        ..http(&t.url("/redirect"))
+    };
     let out = checks::run(&monitor(no_follow).await).await;
     assert_eq!(out.status_code, Some(302));
     assert!(!out.ok);
 
     let out = checks::run(&monitor(http(&t.url("/loop"))).await).await;
-    assert!(out.message.contains("too many redirects"), "{}", out.message);
+    assert!(
+        out.message.contains("too many redirects"),
+        "{}",
+        out.message
+    );
 }
 
 #[tokio::test]
@@ -79,19 +114,57 @@ async fn ip_family_choice_is_respected() {
     let t = Target::start().await;
     let url = format!("http://localhost:{}/", t.addr.port());
 
-    let v4 = checks::run(&monitor(MonitorInput { ip_family: "v4".into(), ..http(&url) }).await).await;
+    let v4 = checks::run(
+        &monitor(MonitorInput {
+            ip_family: "v4".into(),
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
     assert!(v4.ok, "{}", v4.message);
     assert_eq!(v4.remote_ip.as_deref(), Some("127.0.0.1"));
 
-    let v6 = checks::run(&monitor(MonitorInput { ip_family: "v6".into(), timeout_s: 5, ..http(&url) }).await).await;
+    let v6 = checks::run(
+        &monitor(MonitorInput {
+            ip_family: "v6".into(),
+            timeout_s: 5,
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
     assert!(!v6.ok);
-    assert!(v6.message.contains("IPv6") || v6.message.contains("AAAA"), "{}", v6.message);
+    assert!(
+        v6.message.contains("IPv6") || v6.message.contains("AAAA"),
+        "{}",
+        v6.message
+    );
 
-    let auto = checks::run(&monitor(MonitorInput { ip_family: "auto".into(), timeout_s: 5, ..http(&url) }).await).await;
+    let auto = checks::run(
+        &monitor(MonitorInput {
+            ip_family: "auto".into(),
+            timeout_s: 5,
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
     assert!(auto.ok, "auto falls back to IPv4: {}", auto.message);
 
-    let literal = checks::run(&monitor(MonitorInput { ip_family: "v6".into(), ..http(&t.url("/")) }).await).await;
-    assert!(literal.message.contains("not an IPv6 address"), "{}", literal.message);
+    let literal = checks::run(
+        &monitor(MonitorInput {
+            ip_family: "v6".into(),
+            ..http(&t.url("/"))
+        })
+        .await,
+    )
+    .await;
+    assert!(
+        literal.message.contains("not an IPv6 address"),
+        "{}",
+        literal.message
+    );
 }
 
 #[tokio::test]
@@ -101,9 +174,20 @@ async fn tls_certificate_is_verified_and_its_expiry_recorded() {
 
     let strict = checks::run(&monitor(http(&url)).await).await;
     assert!(!strict.ok);
-    assert!(strict.message.starts_with("TLS: invalid certificate"), "{}", strict.message);
+    assert!(
+        strict.message.starts_with("TLS: invalid certificate"),
+        "{}",
+        strict.message
+    );
 
-    let lenient = checks::run(&monitor(MonitorInput { ignore_tls: true, ..http(&url) }).await).await;
+    let lenient = checks::run(
+        &monitor(MonitorInput {
+            ignore_tls: true,
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
     assert!(lenient.ok, "{}", lenient.message);
     assert_eq!(lenient.cert_expires_at, Some(expires_at));
     assert!(lenient.timings.tls_ms.is_some());
@@ -120,24 +204,44 @@ async fn response_content_rules_are_applied() {
         ..http(&t.url("/"))
     };
     let out = checks::run(&monitor(json("ok")).await).await;
-    assert!(!out.ok && out.message.contains("degraded"), "{}", out.message);
+    assert!(
+        !out.ok && out.message.contains("degraded"),
+        "{}",
+        out.message
+    );
     assert!(checks::run(&monitor(json("degraded")).await).await.ok);
 
-    let keyword = MonitorInput { content_kind: "not_contains".into(), content_value: "degraded".into(), ..http(&t.url("/")) };
+    let keyword = MonitorInput {
+        content_kind: "not_contains".into(),
+        content_value: "degraded".into(),
+        ..http(&t.url("/"))
+    };
     assert!(!checks::run(&monitor(keyword).await).await.ok);
 }
 
 #[tokio::test]
 async fn tcp_check_distinguishes_open_and_closed_ports() {
     let t = Target::start().await;
-    let open = checks::tcp::check("127.0.0.1", t.addr.port(), anpi::models::IpFamily::Auto, Duration::from_secs(2)).await;
+    let open = checks::tcp::check(
+        "127.0.0.1",
+        t.addr.port(),
+        anpi::models::IpFamily::Auto,
+        Duration::from_secs(2),
+    )
+    .await;
     assert!(open.ok, "{}", open.message);
 
     let closed_port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
     };
-    let closed = checks::tcp::check("127.0.0.1", closed_port, anpi::models::IpFamily::Auto, Duration::from_secs(5)).await;
+    let closed = checks::tcp::check(
+        "127.0.0.1",
+        closed_port,
+        anpi::models::IpFamily::Auto,
+        Duration::from_secs(5),
+    )
+    .await;
     assert!(!closed.ok);
     assert!(closed.message.starts_with("connect:"), "{}", closed.message);
 }
@@ -156,21 +260,50 @@ async fn websocket_handshake_message_and_reply_check() {
     let plain = checks::run(&monitor(ws("", "none", "")).await).await;
     assert!(plain.ok, "{}", plain.message);
     assert_eq!(plain.status_code, Some(101));
-    assert!(plain.timings.ttfb_ms.is_some(), "handshake time is recorded");
+    assert!(
+        plain.timings.ttfb_ms.is_some(),
+        "handshake time is recorded"
+    );
 
     let echo = checks::run(&monitor(ws("ping", "contains", "echo: ping")).await).await;
     assert!(echo.ok, "{}", echo.message);
     assert_eq!(echo.preview.as_deref(), Some("echo: ping"));
 
     let wrong = checks::run(&monitor(ws("ping", "contains", "pong")).await).await;
-    assert!(!wrong.ok && wrong.message.contains("pong"), "{}", wrong.message);
+    assert!(
+        !wrong.ok && wrong.message.contains("pong"),
+        "{}",
+        wrong.message
+    );
 
     // Waiting for a reply that never comes ends at the timeout and says so.
-    let silent = checks::run(&monitor(MonitorInput { timeout_s: 1, ..ws("", "contains", "x") }).await).await;
-    assert!(!silent.ok && silent.message.contains("waiting for a message"), "{}", silent.message);
+    let silent = checks::run(
+        &monitor(MonitorInput {
+            timeout_s: 1,
+            ..ws("", "contains", "x")
+        })
+        .await,
+    )
+    .await;
+    assert!(
+        !silent.ok && silent.message.contains("waiting for a message"),
+        "{}",
+        silent.message
+    );
 
-    let refused = checks::run(&monitor(MonitorInput { target: "ws://127.0.0.1:9/".into(), ..ws("", "none", "") }).await).await;
-    assert!(!refused.ok && refused.message.starts_with("connect:"), "{}", refused.message);
+    let refused = checks::run(
+        &monitor(MonitorInput {
+            target: "ws://127.0.0.1:9/".into(),
+            ..ws("", "none", "")
+        })
+        .await,
+    )
+    .await;
+    assert!(
+        !refused.ok && refused.message.starts_with("connect:"),
+        "{}",
+        refused.message
+    );
 }
 
 #[tokio::test]
@@ -178,9 +311,36 @@ async fn secure_websocket_verifies_tls() {
     // The TLS test server answers plain HTTP, so the WebSocket upgrade itself fails after TLS succeeds.
     let (addr, expires) = tls_server(30).await;
     let url = format!("wss://localhost:{}/", addr.port());
-    let strict = checks::run(&monitor(MonitorInput { kind: "websocket".into(), ..http(&url) }).await).await;
-    assert!(strict.message.starts_with("TLS: invalid certificate"), "{}", strict.message);
-    let lenient = checks::run(&monitor(MonitorInput { kind: "websocket".into(), ignore_tls: true, ..http(&url) }).await).await;
-    assert!(lenient.message.starts_with("handshake:"), "{}", lenient.message);
-    assert_eq!(lenient.cert_expires_at, Some(expires), "certificate is read even when the upgrade fails");
+    let strict = checks::run(
+        &monitor(MonitorInput {
+            kind: "websocket".into(),
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
+    assert!(
+        strict.message.starts_with("TLS: invalid certificate"),
+        "{}",
+        strict.message
+    );
+    let lenient = checks::run(
+        &monitor(MonitorInput {
+            kind: "websocket".into(),
+            ignore_tls: true,
+            ..http(&url)
+        })
+        .await,
+    )
+    .await;
+    assert!(
+        lenient.message.starts_with("handshake:"),
+        "{}",
+        lenient.message
+    );
+    assert_eq!(
+        lenient.cert_expires_at,
+        Some(expires),
+        "certificate is read even when the upgrade fails"
+    );
 }

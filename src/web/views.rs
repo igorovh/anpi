@@ -34,7 +34,13 @@ impl Layout {
     }
 
     pub fn admin(title: &str, user: &CurrentUser, nav: &'static str) -> Self {
-        Self { user: Some(user.username.clone()), signed_in: true, csrf: user.csrf.clone(), nav, ..Self::bare(&user.brand, title) }
+        Self {
+            user: Some(user.username.clone()),
+            signed_in: true,
+            csrf: user.csrf.clone(),
+            nav,
+            ..Self::bare(&user.brand, title)
+        }
     }
 
     pub fn with_notice(mut self, notice: Option<&str>) -> Self {
@@ -100,15 +106,25 @@ pub fn worst_bars(strips: &[&[Bar]]) -> Vec<Bar> {
                 .filter_map(|s| i.checked_sub(len - s.len()).and_then(|j| s.get(j)))
                 .max_by_key(|b| bar_severity(b.class))
                 .cloned()
-                .unwrap_or(Bar { class: "hb-empty", title: String::new() })
+                .unwrap_or(Bar {
+                    class: "hb-empty",
+                    title: String::new(),
+                })
         })
         .collect()
 }
 
 /// Moves rows under their parent row; rows whose parent is missing stay at the top level.
-pub fn nest<T>(rows: Vec<T>, id: impl Fn(&T) -> i64, parent: impl Fn(&T) -> Option<i64>, children: impl Fn(&mut T) -> &mut Vec<T>) -> Vec<T> {
+pub fn nest<T>(
+    rows: Vec<T>,
+    id: impl Fn(&T) -> i64,
+    parent: impl Fn(&T) -> Option<i64>,
+    children: impl Fn(&mut T) -> &mut Vec<T>,
+) -> Vec<T> {
     let ids: std::collections::HashSet<i64> = rows.iter().map(&id).collect();
-    let (kids, mut top): (Vec<T>, Vec<T>) = rows.into_iter().partition(|r| parent(r).is_some_and(|p| ids.contains(&p)));
+    let (kids, mut top): (Vec<T>, Vec<T>) = rows
+        .into_iter()
+        .partition(|r| parent(r).is_some_and(|p| ids.contains(&p)));
     for kid in kids {
         let p = parent(&kid).expect("partitioned on parent");
         if let Some(row) = top.iter_mut().find(|r| id(r) == p) {
@@ -119,7 +135,12 @@ pub fn nest<T>(rows: Vec<T>, id: impl Fn(&T) -> i64, parent: impl Fn(&T) -> Opti
 }
 
 pub fn heartbeat_bars(beats: &[Heartbeat], slots: usize) -> Vec<Bar> {
-    let mut bars: Vec<Bar> = (0..slots.saturating_sub(beats.len())).map(|_| Bar { class: "hb-empty", title: String::new() }).collect();
+    let mut bars: Vec<Bar> = (0..slots.saturating_sub(beats.len()))
+        .map(|_| Bar {
+            class: "hb-empty",
+            title: String::new(),
+        })
+        .collect();
     for b in beats.iter().rev().take(slots).rev() {
         let s = b.status();
         let mut title = format!("{} · {}", format_ts(b.ts), status_label(s));
@@ -129,7 +150,10 @@ pub fn heartbeat_bars(beats: &[Heartbeat], slots: usize) -> Vec<Bar> {
         if !b.message.is_empty() {
             title.push_str(&format!(" · {}", b.message));
         }
-        bars.push(Bar { class: status_class(s), title });
+        bars.push(Bar {
+            class: status_class(s),
+            title,
+        });
     }
     bars
 }
@@ -153,18 +177,28 @@ pub fn uptime_class(pct: Option<f64>) -> &'static str {
     }
 }
 
-pub fn daily_bars(days: &std::collections::BTreeMap<i64, (i64, i64)>, today: i64, count: i64) -> Vec<Bar> {
+pub fn daily_bars(
+    days: &std::collections::BTreeMap<i64, (i64, i64)>,
+    today: i64,
+    count: i64,
+) -> Vec<Bar> {
     (0..count)
         .rev()
         .map(|i| {
             let day = today - i * DAY_MS;
-            let pct = days.get(&day).filter(|(_, t)| *t > 0).map(|(u, t)| *u as f64 * 100.0 / *t as f64);
+            let pct = days
+                .get(&day)
+                .filter(|(_, t)| *t > 0)
+                .map(|(u, t)| *u as f64 * 100.0 / *t as f64);
             let date = format_ts(day).get(..10).unwrap_or_default().to_string();
             let title = match pct {
                 Some(p) => format!("{date} · {}", format_pct(Some(p))),
                 None => format!("{date} · no data"),
             };
-            Bar { class: uptime_class(pct), title }
+            Bar {
+                class: uptime_class(pct),
+                title,
+            }
         })
         .collect()
 }
@@ -177,13 +211,26 @@ pub fn cert_info(expires_at: Option<i64>, now: i64) -> Option<(String, &'static 
         d if d < 21 => "cert-warn",
         _ => "cert-ok",
     };
-    let text = if days < 0 { "expired".to_string() } else { format!("{days}d") };
+    let text = if days < 0 {
+        "expired".to_string()
+    } else {
+        format!("{days}d")
+    };
     Some((text, class))
 }
 
 fn is_secret_header(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    ["authorization", "cookie", "token", "secret", "key", "password"].iter().any(|s| n.contains(s))
+    [
+        "authorization",
+        "cookie",
+        "token",
+        "secret",
+        "key",
+        "password",
+    ]
+    .iter()
+    .any(|s| n.contains(s))
 }
 
 pub fn masked_headers(raw: &str) -> String {
@@ -200,7 +247,11 @@ pub fn masked_headers(raw: &str) -> String {
 
 pub fn describe_expectation(m: &Monitor) -> String {
     let v = &m.content_value;
-    let what = if m.kind() == MonitorKind::WebSocket { "reply" } else { "body" };
+    let what = if m.kind() == MonitorKind::WebSocket {
+        "reply"
+    } else {
+        "body"
+    };
     match m.content_kind() {
         ContentKind::None if m.kind() == MonitorKind::WebSocket => "handshake succeeds".into(),
         ContentKind::None => "status code only".into(),
@@ -234,35 +285,92 @@ pub fn check_facts(m: &Monitor) -> Vec<(&'static str, String)> {
             if !m.headers.trim().is_empty() {
                 f.push(("Headers", masked_headers(&m.headers)));
             }
-            f.push(("Sends", if m.body.is_empty() { "nothing".into() } else { m.body.chars().take(200).collect() }));
+            f.push((
+                "Sends",
+                if m.body.is_empty() {
+                    "nothing".into()
+                } else {
+                    m.body.chars().take(200).collect()
+                },
+            ));
             f.push(("Expects", describe_expectation(m)));
         }
-        MonitorKind::Tcp => f.push(("Connects to", format!("{}:{}", m.target, m.port.unwrap_or(0)))),
+        MonitorKind::Tcp => f.push((
+            "Connects to",
+            format!("{}:{}", m.target, m.port.unwrap_or(0)),
+        )),
         MonitorKind::Ping => f.push(("Pings", m.target.clone())),
         MonitorKind::Dns => {
             f.push(("Query", format!("{} {}", m.dns_record_type, m.target)));
-            f.push(("Resolver", if m.dns_server.is_empty() { "system".into() } else { m.dns_server.clone() }));
+            f.push((
+                "Resolver",
+                if m.dns_server.is_empty() {
+                    "system".into()
+                } else {
+                    m.dns_server.clone()
+                },
+            ));
             if !m.content_expected.is_empty() {
-                f.push(("Expects", format!("a record containing {}", m.content_expected)));
+                f.push((
+                    "Expects",
+                    format!("a record containing {}", m.content_expected),
+                ));
             }
         }
-        MonitorKind::Push => f.push(("Expects", format!("a push at least every {}s", m.interval_s))),
+        MonitorKind::Push => f.push((
+            "Expects",
+            format!("a push at least every {}s", m.interval_s),
+        )),
         MonitorKind::Aggregate => f.push(("Shows", "the worst status of its sub-monitors".into())),
     }
-    if matches!(m.kind(), MonitorKind::Http | MonitorKind::WebSocket | MonitorKind::Tcp | MonitorKind::Ping) {
-        f.push(("IP version", match m.ip_family() { IpFamily::Auto => "auto (IPv6, then IPv4)", IpFamily::V4 => "IPv4 only", IpFamily::V6 => "IPv6 only" }.into()));
+    if matches!(
+        m.kind(),
+        MonitorKind::Http | MonitorKind::WebSocket | MonitorKind::Tcp | MonitorKind::Ping
+    ) {
+        f.push((
+            "IP version",
+            match m.ip_family() {
+                IpFamily::Auto => "auto (IPv6, then IPv4)",
+                IpFamily::V4 => "IPv4 only",
+                IpFamily::V6 => "IPv6 only",
+            }
+            .into(),
+        ));
     }
     if matches!(m.kind(), MonitorKind::Http | MonitorKind::WebSocket) {
-        f.push(("TLS", if m.ignore_tls { "errors ignored".into() } else { "verified".into() }));
-        f.push(("Certificate warning", if m.ssl_warn_days > 0 { format!("{} days before expiry", m.ssl_warn_days) } else { "off".into() }));
+        f.push((
+            "TLS",
+            if m.ignore_tls {
+                "errors ignored".into()
+            } else {
+                "verified".into()
+            },
+        ));
+        f.push((
+            "Certificate warning",
+            if m.ssl_warn_days > 0 {
+                format!("{} days before expiry", m.ssl_warn_days)
+            } else {
+                "off".into()
+            },
+        ));
     }
     if !matches!(m.kind(), MonitorKind::Push | MonitorKind::Aggregate) {
-        f.push(("Interval", format!("every {}s, every {}s while failing", m.interval_s, m.retry_interval_s)));
+        f.push((
+            "Interval",
+            format!(
+                "every {}s, every {}s while failing",
+                m.interval_s, m.retry_interval_s
+            ),
+        ));
         f.push(("Timeout", format!("{}s", m.timeout_s)));
     }
     if m.kind() != MonitorKind::Aggregate {
         let n = m.failure_threshold;
-        f.push(("Down after", format!("{n} failed check{} in a row", if n == 1 { "" } else { "s" })));
+        f.push((
+            "Down after",
+            format!("{n} failed check{} in a row", if n == 1 { "" } else { "s" }),
+        ));
     }
     f
 }
@@ -319,7 +427,9 @@ mod tests {
 
     #[test]
     fn heartbeat_strip_is_padded_and_keeps_newest() {
-        let beats: Vec<_> = (0..5).map(|i| beat(i, if i == 4 { Status::Down } else { Status::Up })).collect();
+        let beats: Vec<_> = (0..5)
+            .map(|i| beat(i, if i == 4 { Status::Down } else { Status::Up }))
+            .collect();
         let bars = heartbeat_bars(&beats, 8);
         assert_eq!(bars.len(), 8);
         assert_eq!(bars.iter().filter(|b| b.class == "hb-empty").count(), 3);
@@ -334,20 +444,35 @@ mod tests {
         let today = 100 * DAY_MS;
         let days = BTreeMap::from([(today, (99, 100)), (today - 2 * DAY_MS, (10, 10))]);
         let bars = daily_bars(&days, today, 3);
-        assert_eq!(bars.iter().map(|b| b.class).collect::<Vec<_>>(), vec!["b-up", "b-none", "b-minor"]);
+        assert_eq!(
+            bars.iter().map(|b| b.class).collect::<Vec<_>>(),
+            vec!["b-up", "b-none", "b-minor"]
+        );
     }
 
     #[test]
     fn worst_bars_keep_the_most_severe_slot() {
-        let b = |c: &'static str| Bar { class: c, title: c.into() };
+        let b = |c: &'static str| Bar {
+            class: c,
+            title: c.into(),
+        };
         let a = [b("s-up"), b("s-up"), b("hb-empty")];
         let c = [b("s-pending"), b("s-up"), b("s-up")];
         let d = [b("s-up"), b("s-down"), b("s-up")];
-        let out: Vec<_> = worst_bars(&[&a, &c, &d]).into_iter().map(|b| b.class).collect();
+        let out: Vec<_> = worst_bars(&[&a, &c, &d])
+            .into_iter()
+            .map(|b| b.class)
+            .collect();
         assert_eq!(out, vec!["s-pending", "s-down", "s-up"]);
         let days = [b("b-none"), b("b-minor")];
         let more = [b("b-up"), b("b-up")];
-        assert_eq!(worst_bars(&[&days, &more]).into_iter().map(|b| b.class).collect::<Vec<_>>(), vec!["b-up", "b-minor"]);
+        assert_eq!(
+            worst_bars(&[&days, &more])
+                .into_iter()
+                .map(|b| b.class)
+                .collect::<Vec<_>>(),
+            vec!["b-up", "b-minor"]
+        );
     }
 
     #[test]
@@ -358,16 +483,37 @@ mod tests {
             parent: Option<i64>,
             kids: Vec<R>,
         }
-        let r = |id, parent| R { id, parent, kids: vec![] };
-        let out = nest(vec![r(1, None), r(2, Some(1)), r(3, Some(99)), r(4, Some(1))], |x| x.id, |x| x.parent, |x| &mut x.kids);
-        assert_eq!(out.iter().map(|x| x.id).collect::<Vec<_>>(), vec![1, 3], "orphan 3 stays top-level");
-        assert_eq!(out[0].kids.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2, 4], "children keep their order");
+        let r = |id, parent| R {
+            id,
+            parent,
+            kids: vec![],
+        };
+        let out = nest(
+            vec![r(1, None), r(2, Some(1)), r(3, Some(99)), r(4, Some(1))],
+            |x| x.id,
+            |x| x.parent,
+            |x| &mut x.kids,
+        );
+        assert_eq!(
+            out.iter().map(|x| x.id).collect::<Vec<_>>(),
+            vec![1, 3],
+            "orphan 3 stays top-level"
+        );
+        assert_eq!(
+            out[0].kids.iter().map(|x| x.id).collect::<Vec<_>>(),
+            vec![2, 4],
+            "children keep their order"
+        );
     }
 
     #[test]
     fn secret_header_values_are_masked() {
-        let out = masked_headers("Authorization: Bearer abc\nX-Api-Key: k\nAccept: application/json");
-        assert_eq!(out, "Authorization: ••••••\nX-Api-Key: ••••••\nAccept: application/json");
+        let out =
+            masked_headers("Authorization: Bearer abc\nX-Api-Key: k\nAccept: application/json");
+        assert_eq!(
+            out,
+            "Authorization: ••••••\nX-Api-Key: ••••••\nAccept: application/json"
+        );
     }
 
     #[test]
@@ -377,7 +523,13 @@ mod tests {
         input.content_value = "$.status".into();
         input.content_expected = "ok".into();
         let facts = check_facts(&Monitor::draft(&input));
-        let get = |k: &str| facts.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        let get = |k: &str| {
+            facts
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
         assert_eq!(get("Request"), "GET https://api.example.com/health");
         assert_eq!(get("Expects"), "JSON $.status = ok");
         assert_eq!(get("Interval"), "every 60s, every 30s while failing");
@@ -386,24 +538,50 @@ mod tests {
         input.kind = "websocket".into();
         input.content_kind = "none".into();
         let facts = check_facts(&Monitor::draft(&input));
-        assert!(facts.iter().any(|(k, v)| *k == "Expects" && v == "handshake succeeds"));
+        assert!(
+            facts
+                .iter()
+                .any(|(k, v)| *k == "Expects" && v == "handshake succeeds")
+        );
         assert!(facts.iter().any(|(k, v)| *k == "Sends" && v == "nothing"));
     }
 
     #[test]
     fn pager_clamps_and_links() {
         let p = Pager::new(42, 10, 1, |n| format!("?p={n}"));
-        assert_eq!((p.page, p.pages, p.prev.as_deref(), p.next.as_deref()), (1, 5, None, Some("?p=2")));
+        assert_eq!(
+            (p.page, p.pages, p.prev.as_deref(), p.next.as_deref()),
+            (1, 5, None, Some("?p=2"))
+        );
         let last = Pager::new(42, 10, 99, |n| format!("?p={n}"));
-        assert_eq!((last.page, last.next.as_deref(), last.prev.as_deref()), (5, None, Some("?p=4")), "out of range clamps to the last page");
+        assert_eq!(
+            (last.page, last.next.as_deref(), last.prev.as_deref()),
+            (5, None, Some("?p=4")),
+            "out of range clamps to the last page"
+        );
         let empty = Pager::new(0, 10, 0, |n| format!("?p={n}"));
         assert_eq!((empty.page, empty.pages, empty.is_multi()), (1, 1, false));
-        assert_eq!(Pager::new(10, 10, 1, |n| n.to_string()).pages, 1, "an exact multiple has no empty last page");
+        assert_eq!(
+            Pager::new(10, 10, 1, |n| n.to_string()).pages,
+            1,
+            "an exact multiple has no empty last page"
+        );
     }
 
     #[test]
     fn unknown_notice_codes_are_ignored() {
-        assert_eq!(Layout::bare(&Branding::default(), "x").with_notice(Some("<script>")).notice, None);
-        assert_eq!(Layout::bare(&Branding::default(), "x").with_notice(Some("saved")).notice.as_deref(), Some("Saved."));
+        assert_eq!(
+            Layout::bare(&Branding::default(), "x")
+                .with_notice(Some("<script>"))
+                .notice,
+            None
+        );
+        assert_eq!(
+            Layout::bare(&Branding::default(), "x")
+                .with_notice(Some("saved"))
+                .notice
+                .as_deref(),
+            Some("Saved.")
+        );
     }
 }

@@ -12,11 +12,15 @@ Create a token under **Settings → API tokens**, or on the server:
 anpi api-token terraform    # prints the token once
 ```
 
-Tokens belong to the instance, not to a user, and work until they are revoked under **Settings → API tokens**. A token can change all of the objects below but cannot open the panel, manage users or change settings. Send it as a bearer token:
+Tokens belong to the instance, not to a user, and work until they are revoked under **Settings → API tokens**. They cannot open the panel, manage users or change settings by default. Send a token as a bearer token:
 
 ```sh
 curl -H "Authorization: Bearer anpi_…" https://status.example.com/api/v1/monitors
 ```
+
+SSO requires a separate permission. Select **Allow SSO changes** when creating a token, or run `anpi api-token terraform --allow-sso`. This permission grants control over panel sign-in and allows reading the SSO client secret. Keep the token private.
+
+`GET /api/v1/sso` returns `enabled`, `base_url`, `issuer`, `client_id`, `client_secret`, `required_role`, `scopes` and read-only `source` (`off`, `panel` or `env`). `PUT /api/v1/sso` replaces those settings, except `source`. Enabling SSO checks that the identity provider responds; invalid settings or a failed check return `400`. `DELETE /api/v1/sso` disables SSO. When SSO is configured by `ANPI_OIDC_*`, both `PUT` and `DELETE` return `400`. Tokens without SSO permission receive `403` for all three methods.
 
 ## Terraform
 

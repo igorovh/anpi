@@ -11,9 +11,9 @@ pub mod report;
 pub mod retention;
 pub mod selfcheck;
 pub mod stats;
+pub mod store;
 pub mod tls;
 pub mod update;
-pub mod store;
 pub mod util;
 pub mod web;
 
@@ -39,7 +39,9 @@ pub async fn build(config: Config, db: db::Db) -> anyhow::Result<App> {
     ctx.reload_branding().await?;
     ctx.reload_auth().await?;
     if ctx.auth().oidc.is_some_and(|o| !o.requires_role()) {
-        tracing::warn!("SSO has no required role: every account the identity provider signs in becomes an admin");
+        tracing::warn!(
+            "SSO has no required role: every account the identity provider signs in becomes an admin"
+        );
     }
     let scheduler = Scheduler::new(ctx.clone());
     let state = web::AppState::new(ctx.clone(), scheduler.clone());
@@ -48,7 +50,11 @@ pub async fn build(config: Config, db: db::Db) -> anyhow::Result<App> {
         tracing::warn!("no accounts yet: open /setup and enter setup code {code}");
         *state.setup_code.lock().expect("setup lock") = Some(code);
     }
-    Ok(App { ctx, scheduler, state })
+    Ok(App {
+        ctx,
+        scheduler,
+        state,
+    })
 }
 
 pub async fn run(config: Config) -> anyhow::Result<()> {
@@ -59,15 +65,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs the server until `stop` completes; live-update streams close at once, other requests get a short grace period.
-pub async fn run_until(config: Config, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
-    let db = db::open(&config.database_path).await.with_context(|| format!("opening {}", config.database_path.display()))?;
+pub async fn run_until(
+    config: Config,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let db = db::open(&config.database_path)
+        .await
+        .with_context(|| format!("opening {}", config.database_path.display()))?;
     let bind = config.bind;
     let app = build(config, db).await?;
     let tls = match &app.ctx.config.tls {
         Some((cert, key)) => Some(tls::load(cert, key)?),
         None => None,
     };
-    let listener = tokio::net::TcpListener::bind(bind).await.with_context(|| format!("binding {bind}"))?;
+    let listener = tokio::net::TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("binding {bind}"))?;
     app.scheduler.start_all_missing().await?;
     retention::spawn(app.ctx.clone());
     selfcheck::spawn(app.ctx.clone());
@@ -82,17 +95,25 @@ pub async fn run_until(config: Config, stop: impl std::future::Future<Output = (
             token.cancel();
         }
     };
-    let service = web::router(app.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    let service =
+        web::router(app.state.clone()).into_make_service_with_connect_info::<SocketAddr>();
     let served = async {
         match tls {
             Some(acceptor) => {
                 tracing::info!("anpi listening on https://{bind}");
-                let listener = axum::serve::ListenerExt::tap_io(tls::TlsListener::new(listener, acceptor)?, |_| {});
-                axum::serve(listener, service).with_graceful_shutdown(signal).await
+                let listener = axum::serve::ListenerExt::tap_io(
+                    tls::TlsListener::new(listener, acceptor)?,
+                    |_| {},
+                );
+                axum::serve(listener, service)
+                    .with_graceful_shutdown(signal)
+                    .await
             }
             None => {
                 tracing::info!("anpi listening on http://{bind}");
-                axum::serve(listener, service).with_graceful_shutdown(signal).await
+                axum::serve(listener, service)
+                    .with_graceful_shutdown(signal)
+                    .await
             }
         }
     };
@@ -113,7 +134,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

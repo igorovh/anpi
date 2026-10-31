@@ -10,7 +10,9 @@ use super::charts::{self, PhaseAvg};
 use super::views::{self, Bar, Layout, status_label};
 use super::{AppError, AppResult, AppState, CurrentUser, public, render};
 use crate::checks::{self, content, dns, status_codes::StatusMatcher};
-use crate::models::{ContentKind, IpFamily, Monitor, MonitorGroup, MonitorInput, MonitorKind, Status};
+use crate::models::{
+    ContentKind, IpFamily, Monitor, MonitorGroup, MonitorInput, MonitorKind, Status,
+};
 use crate::stats;
 use crate::store;
 use crate::store::monitors::Position;
@@ -57,13 +59,21 @@ impl MonitorRow {
             return;
         }
         let own = self.status.filter(|_| self.active);
-        let statuses = own.into_iter().chain(self.children.iter().filter(|c| c.active).filter_map(|c| c.status));
+        let statuses = own.into_iter().chain(
+            self.children
+                .iter()
+                .filter(|c| c.active)
+                .filter_map(|c| c.status),
+        );
         if let Some(worst) = Status::worst(statuses) {
             self.status = Some(worst);
             self.status_class = views::status_class(worst);
             self.status_label = status_label(worst);
         }
-        let uptimes = self.uptime.into_iter().chain(self.children.iter().filter_map(|c| c.uptime));
+        let uptimes = self
+            .uptime
+            .into_iter()
+            .chain(self.children.iter().filter_map(|c| c.uptime));
         self.uptime = uptimes.fold(None, |a: Option<f64>, b| Some(a.map_or(b, |a| a.min(b))));
         self.uptime_24h = format_pct(self.uptime);
         let mut strips: Vec<&[Bar]> = self.children.iter().map(|c| c.bars.as_slice()).collect();
@@ -86,7 +96,11 @@ struct DashboardPage {
     group_options: Vec<(i64, String)>,
 }
 
-pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): Query<NoticeQuery>) -> AppResult<Html<String>> {
+pub async fn dashboard(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<NoticeQuery>,
+) -> AppResult<Html<String>> {
     let db = st.db();
     let now = now_ms();
     let monitors = store::monitors::list(db).await?;
@@ -126,7 +140,11 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
             status,
             status_class,
             status_label,
-            latency: if aggregate { format_ms(None) } else { format_ms(last.and_then(|b| b.total_ms)) },
+            latency: if aggregate {
+                format_ms(None)
+            } else {
+                format_ms(last.and_then(|b| b.total_ms))
+            },
             uptime,
             uptime_24h: format_pct(uptime),
             bars: views::heartbeat_bars(beats, 40),
@@ -152,31 +170,62 @@ pub async fn dashboard(State(st): State<AppState>, user: CurrentUser, Query(q): 
 }
 
 /// Dropping above or below `anchor` makes the monitor its sibling: same group, same parent.
-pub fn plan_reorder(all: &[Monitor], group_ids: &[i64], id: i64, anchor: i64, after: bool) -> Result<(Option<i64>, Option<i64>, Position), String> {
-    let a = all.iter().find(|m| m.id == anchor).ok_or("Target monitor not found")?;
+pub fn plan_reorder(
+    all: &[Monitor],
+    group_ids: &[i64],
+    id: i64,
+    anchor: i64,
+    after: bool,
+) -> Result<(Option<i64>, Option<i64>, Position), String> {
+    let a = all
+        .iter()
+        .find(|m| m.id == anchor)
+        .ok_or("Target monitor not found")?;
     if anchor == id {
         return Err("A monitor cannot be placed next to itself".into());
     }
     let (group, parent) = plan_move(all, group_ids, id, a.group_id, a.parent_id)?;
-    Ok((group, parent, if after { Position::After(anchor) } else { Position::Before(anchor) }))
+    Ok((
+        group,
+        parent,
+        if after {
+            Position::After(anchor)
+        } else {
+            Position::Before(anchor)
+        },
+    ))
 }
 
 /// Works out where a dragged monitor lands; nesting puts it in its parent's group.
-pub fn plan_move(all: &[Monitor], group_ids: &[i64], id: i64, group: Option<i64>, parent: Option<i64>) -> Result<(Option<i64>, Option<i64>), String> {
+pub fn plan_move(
+    all: &[Monitor],
+    group_ids: &[i64],
+    id: i64,
+    group: Option<i64>,
+    parent: Option<i64>,
+) -> Result<(Option<i64>, Option<i64>), String> {
     if !all.iter().any(|m| m.id == id) {
         return Err("Monitor not found".into());
     }
     match parent {
         Some(p) => {
-            let Some(target) = all.iter().find(|m| m.id == p) else { return Err("Target monitor not found".into()) };
+            let Some(target) = all.iter().find(|m| m.id == p) else {
+                return Err("Target monitor not found".into());
+            };
             if p == id {
                 return Err("A monitor cannot be its own parent".into());
             }
             if target.parent_id.is_some() {
-                return Err("That monitor is itself a sub-monitor; only one level of nesting is supported".into());
+                return Err(
+                    "That monitor is itself a sub-monitor; only one level of nesting is supported"
+                        .into(),
+                );
             }
             if all.iter().any(|m| m.parent_id == Some(id)) {
-                return Err("This monitor has sub-monitors, so it cannot be placed under another one".into());
+                return Err(
+                    "This monitor has sub-monitors, so it cannot be placed under another one"
+                        .into(),
+                );
             }
             Ok((target.group_id, Some(p)))
         }
@@ -205,17 +254,32 @@ fn parse_opt_id(v: &str) -> Result<Option<i64>, String> {
     }
 }
 
-pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<MoveForm>) -> AppResult<Response> {
+pub async fn move_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<MoveForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let all = store::monitors::list(st.db()).await?;
-    let group_ids: Vec<i64> = store::groups::list(st.db()).await?.iter().map(|g| g.id).collect();
+    let group_ids: Vec<i64> = store::groups::list(st.db())
+        .await?
+        .iter()
+        .map(|g| g.id)
+        .collect();
     let plan = match parse_opt_id(&f.anchor_id) {
         Ok(Some(anchor)) => plan_reorder(&all, &group_ids, id, anchor, f.place == "after"),
-        Ok(None) => parse_opt_id(&f.group_id).and_then(|g| parse_opt_id(&f.parent_id).map(|p| (g, p))).and_then(|(g, p)| {
-            // Dropping on a group header sends the monitor to the end of that group.
-            let position = if p.is_none() { Position::End } else { Position::Keep };
-            plan_move(&all, &group_ids, id, g, p).map(|(g, p)| (g, p, position))
-        }),
+        Ok(None) => parse_opt_id(&f.group_id)
+            .and_then(|g| parse_opt_id(&f.parent_id).map(|p| (g, p)))
+            .and_then(|(g, p)| {
+                // Dropping on a group header sends the monitor to the end of that group.
+                let position = if p.is_none() {
+                    Position::End
+                } else {
+                    Position::Keep
+                };
+                plan_move(&all, &group_ids, id, g, p).map(|(g, p)| (g, p, position))
+            }),
         Err(e) => Err(e),
     };
     match plan {
@@ -223,7 +287,11 @@ pub async fn move_monitor(State(st): State<AppState>, user: CurrentUser, Path(id
             store::monitors::place(st.db(), id, group, parent, position).await?;
             Ok(axum::Json(serde_json::json!({ "ok": true })).into_response())
         }
-        Err(e) => Ok((StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "ok": false, "error": e }))).into_response()),
+        Err(e) => Ok((
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response()),
     }
 }
 
@@ -237,10 +305,19 @@ pub struct BulkForm {
 }
 
 /// Pauses, resumes, moves or deletes the monitors ticked on the dashboard.
-pub async fn bulk_monitors(State(st): State<AppState>, user: CurrentUser, Form(f): Form<BulkForm>) -> AppResult<Response> {
+pub async fn bulk_monitors(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<BulkForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let all = store::monitors::list(st.db()).await?;
-    let ids: Vec<i64> = f.ids.iter().copied().filter(|id| all.iter().any(|m| m.id == *id)).collect();
+    let ids: Vec<i64> = f
+        .ids
+        .iter()
+        .copied()
+        .filter(|id| all.iter().any(|m| m.id == *id))
+        .collect();
     if ids.is_empty() {
         return Ok(Redirect::to("/admin?notice=none-selected").into_response());
     }
@@ -251,13 +328,22 @@ pub async fn bulk_monitors(State(st): State<AppState>, user: CurrentUser, Form(f
                 store::monitors::set_active(st.db(), id, active).await?;
                 st.scheduler.reload(id).await?;
             }
-            if active { "bulk-resumed" } else { "bulk-paused" }
+            if active {
+                "bulk-resumed"
+            } else {
+                "bulk-paused"
+            }
         }
         "move" => {
-            let group_ids: Vec<i64> = store::groups::list(st.db()).await?.iter().map(|g| g.id).collect();
+            let group_ids: Vec<i64> = store::groups::list(st.db())
+                .await?
+                .iter()
+                .map(|g| g.id)
+                .collect();
             let group = parse_opt_id(&f.group_id).map_err(AppError::bad_request)?;
             for &id in &ids {
-                let (g, p) = plan_move(&all, &group_ids, id, group, None).map_err(AppError::bad_request)?;
+                let (g, p) =
+                    plan_move(&all, &group_ids, id, group, None).map_err(AppError::bad_request)?;
                 store::monitors::move_to(st.db(), id, g, p).await?;
             }
             "bulk-moved"
@@ -275,22 +361,37 @@ pub async fn bulk_monitors(State(st): State<AppState>, user: CurrentUser, Form(f
 }
 
 /// Runs the check described by the unsaved form and reports the result without storing anything.
-pub async fn test_monitor(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MonitorForm>) -> AppResult<Response> {
+pub async fn test_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<MonitorForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let input = match validate_with_groups(&st, &f, None).await? {
         Ok(i) => i,
-        Err(e) => return Ok(axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response()),
+        Err(e) => {
+            return Ok(axum::Json(serde_json::json!({ "ok": false, "error": e })).into_response());
+        }
     };
     let kind = MonitorKind::parse(&input.kind).unwrap_or(MonitorKind::Http);
     if matches!(kind, MonitorKind::Push | MonitorKind::Aggregate) {
-        return Ok(axum::Json(serde_json::json!({ "ok": false, "error": "This type is not checked actively." })).into_response());
+        return Ok(axum::Json(
+            serde_json::json!({ "ok": false, "error": "This type is not checked actively." }),
+        )
+        .into_response());
     }
     let out = checks::run(&Monitor::draft(&input)).await;
     let t = &out.timings;
-    let timings: Vec<(&str, String)> = [("DNS", t.dns_ms), ("Connect", t.connect_ms), ("TLS", t.tls_ms), ("Response", t.ttfb_ms), ("Total", t.total_ms)]
-        .into_iter()
-        .filter_map(|(k, v)| v.map(|v| (k, format_ms(Some(v)))))
-        .collect();
+    let timings: Vec<(&str, String)> = [
+        ("DNS", t.dns_ms),
+        ("Connect", t.connect_ms),
+        ("TLS", t.tls_ms),
+        ("Response", t.ttfb_ms),
+        ("Total", t.total_ms),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.map(|v| (k, format_ms(Some(v)))))
+    .collect();
     Ok(axum::Json(serde_json::json!({
         "ok": out.ok,
         "message": out.message,
@@ -356,8 +457,16 @@ impl MonitorForm {
             csrf: String::new(),
             name: m.name.clone(),
             kind: m.kind.clone(),
-            url: if is_http { m.target.clone() } else { String::new() },
-            host: if is_http { String::new() } else { m.target.clone() },
+            url: if is_http {
+                m.target.clone()
+            } else {
+                String::new()
+            },
+            host: if is_http {
+                String::new()
+            } else {
+                m.target.clone()
+            },
             port: m.port.map(|p| p.to_string()).unwrap_or_default(),
             method: m.method.clone(),
             headers: m.headers.clone(),
@@ -372,8 +481,16 @@ impl MonitorForm {
             ignore_tls: flag(m.ignore_tls),
             content_kind: m.content_kind.clone(),
             content_value: m.content_value.clone(),
-            content_expected: if is_http { m.content_expected.clone() } else { String::new() },
-            dns_expected: if is_http { String::new() } else { m.content_expected.clone() },
+            content_expected: if is_http {
+                m.content_expected.clone()
+            } else {
+                String::new()
+            },
+            dns_expected: if is_http {
+                String::new()
+            } else {
+                m.content_expected.clone()
+            },
             ssl_warn_days: m.ssl_warn_days.to_string(),
             dns_record_type: m.dns_record_type.clone(),
             dns_server: m.dns_server.clone(),
@@ -451,7 +568,11 @@ impl MonitorForm {
         };
         // Fields hidden for the chosen type are not submitted, so empty values fall back to defaults.
         let timing = |v: &str, field: &str, min: i64, max: i64, default: i64| {
-            if v.trim().is_empty() { Ok(default) } else { num(v, field, min, max) }
+            if v.trim().is_empty() {
+                Ok(default)
+            } else {
+                num(v, field, min, max)
+            }
         };
         let name = self.name.trim().to_string();
         if name.is_empty() || name.chars().count() > 100 {
@@ -459,26 +580,36 @@ impl MonitorForm {
         }
         let kind = MonitorKind::parse(&self.kind).ok_or("Unknown monitor type")?;
         let uses_url = matches!(kind, MonitorKind::Http | MonitorKind::WebSocket);
-        let target = if uses_url { self.url.trim() } else { self.host.trim() }.to_string();
+        let target = if uses_url {
+            self.url.trim()
+        } else {
+            self.host.trim()
+        }
+        .to_string();
         let mut port = None;
         let mut method = "GET".to_string();
         let content_kind = ContentKind::parse(&self.content_kind);
         match kind {
             MonitorKind::Http => {
-                let u = url::Url::parse(&target).map_err(|_| "URL must be a full address like https://example.com")?;
+                let u = url::Url::parse(&target)
+                    .map_err(|_| "URL must be a full address like https://example.com")?;
                 if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
                     return Err("URL must start with http:// or https://".into());
                 }
                 method = self.method.trim().to_ascii_uppercase();
-                if !["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"].contains(&method.as_str()) {
+                if !["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+                    .contains(&method.as_str())
+                {
                     return Err("Unsupported HTTP method".into());
                 }
                 checks::parse_headers(&self.headers)?;
-                StatusMatcher::parse(&self.expected_status).map_err(|e| format!("Accepted status codes: {e}"))?;
+                StatusMatcher::parse(&self.expected_status)
+                    .map_err(|e| format!("Accepted status codes: {e}"))?;
                 content::validate(content_kind, &self.content_value)?;
             }
             MonitorKind::WebSocket => {
-                let u = url::Url::parse(&target).map_err(|_| "URL must be a full address like wss://example.com/socket")?;
+                let u = url::Url::parse(&target)
+                    .map_err(|_| "URL must be a full address like wss://example.com/socket")?;
                 if !matches!(u.scheme(), "ws" | "wss") || u.host_str().is_none() {
                     return Err("WebSocket URL must start with ws:// or wss://".into());
                 }
@@ -510,7 +641,11 @@ impl MonitorForm {
         Ok(MonitorInput {
             name,
             kind: kind.as_str().into(),
-            target: if matches!(kind, MonitorKind::Push | MonitorKind::Aggregate) { String::new() } else { target },
+            target: if matches!(kind, MonitorKind::Push | MonitorKind::Aggregate) {
+                String::new()
+            } else {
+                target
+            },
             port,
             method,
             headers: self.headers.trim().to_string(),
@@ -523,10 +658,16 @@ impl MonitorForm {
             ip_family: IpFamily::parse(&self.ip_family).as_str().into(),
             follow_redirects: self.follow_redirects.is_some(),
             ignore_tls: self.ignore_tls.is_some(),
-            content_kind: if uses_url { content_kind.as_str().into() } else { "none".into() },
+            content_kind: if uses_url {
+                content_kind.as_str().into()
+            } else {
+                "none".into()
+            },
             content_value: self.content_value.clone(),
             content_expected: match kind {
-                MonitorKind::Http | MonitorKind::WebSocket => self.content_expected.trim().to_string(),
+                MonitorKind::Http | MonitorKind::WebSocket => {
+                    self.content_expected.trim().to_string()
+                }
                 MonitorKind::Dns => self.dns_expected.trim().to_string(),
                 _ => String::new(),
             },
@@ -574,18 +715,35 @@ struct MonitorFormPage {
     record_types: Vec<&'static str>,
 }
 
-async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: MonitorForm, error: Option<String>) -> AppResult<Response> {
+async fn form_page(
+    st: &AppState,
+    user: &CurrentUser,
+    id: Option<i64>,
+    f: MonitorForm,
+    error: Option<String>,
+) -> AppResult<Response> {
     let channels = store::notifications::list(st.db())
         .await?
         .into_iter()
         .map(|c| ChannelOption {
             id: c.id,
             name: c.name,
-            kind: crate::notify::KINDS.iter().find(|(k, _)| *k == c.kind).map_or(c.kind.clone(), |(_, l)| l.to_string()),
+            kind: crate::notify::KINDS
+                .iter()
+                .find(|(k, _)| *k == c.kind)
+                .map_or(c.kind.clone(), |(_, l)| l.to_string()),
         })
         .collect();
-    let title = if id.is_some() { "Edit monitor" } else { "New monitor" };
-    let status = if error.is_some() { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+    let title = if id.is_some() {
+        "Edit monitor"
+    } else {
+        "New monitor"
+    };
+    let status = if error.is_some() {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::OK
+    };
     let page = MonitorFormPage {
         layout: Layout::admin(title, user, "monitors"),
         id,
@@ -599,7 +757,10 @@ async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: Monito
             .filter(|m| m.parent_id.is_none() && Some(m.id) != id)
             .map(|m| (m.id, m.name))
             .collect(),
-        kinds: MonitorKind::ALL.iter().map(|k| (k.as_str(), k.label())).collect(),
+        kinds: MonitorKind::ALL
+            .iter()
+            .map(|k| (k.as_str(), k.label()))
+            .collect(),
         record_types: dns::RECORD_TYPES.to_vec(),
     };
     Ok((status, render(&page)?).into_response())
@@ -607,18 +768,28 @@ async fn form_page(st: &AppState, user: &CurrentUser, id: Option<i64>, f: Monito
 
 pub async fn new_monitor(State(st): State<AppState>, user: CurrentUser) -> AppResult<Response> {
     let defaults = store::notifications::default_ids(st.db()).await?;
-    let f = MonitorForm { channels: defaults, ..MonitorForm::default() };
+    let f = MonitorForm {
+        channels: defaults,
+        ..MonitorForm::default()
+    };
     form_page(&st, &user, None, f, None).await
 }
 
 /// Checks references to other rows; only one level of nesting is allowed.
-pub(super) async fn validate_with_groups(st: &AppState, f: &MonitorForm, editing: Option<i64>) -> sqlx::Result<Result<MonitorInput, String>> {
+pub(super) async fn validate_with_groups(
+    st: &AppState,
+    f: &MonitorForm,
+    editing: Option<i64>,
+) -> sqlx::Result<Result<MonitorInput, String>> {
     let input = match f.validate() {
         Ok(i) => i,
         Err(e) => return Ok(Err(e)),
     };
     if let Some(g) = input.group_id
-        && !store::groups::list(st.db()).await?.iter().any(|x| x.id == g)
+        && !store::groups::list(st.db())
+            .await?
+            .iter()
+            .any(|x| x.id == g)
     {
         return Ok(Err("That group no longer exists".into()));
     }
@@ -631,16 +802,24 @@ pub(super) async fn validate_with_groups(st: &AppState, f: &MonitorForm, editing
             return Ok(Err("A monitor cannot be its own parent".into()));
         }
         if parent.parent_id.is_some() {
-            return Ok(Err("The parent is itself a sub-monitor; only one level of nesting is supported".into()));
+            return Ok(Err(
+                "The parent is itself a sub-monitor; only one level of nesting is supported".into(),
+            ));
         }
         if editing.is_some_and(|id| all.iter().any(|m| m.parent_id == Some(id))) {
-            return Ok(Err("This monitor has sub-monitors, so it cannot be placed under another one".into()));
+            return Ok(Err(
+                "This monitor has sub-monitors, so it cannot be placed under another one".into(),
+            ));
         }
     }
     Ok(Ok(input))
 }
 
-pub async fn create_monitor(State(st): State<AppState>, user: CurrentUser, Form(f): Form<MonitorForm>) -> AppResult<Response> {
+pub async fn create_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<MonitorForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     let input = match validate_with_groups(&st, &f, None).await? {
         Ok(i) => i,
@@ -652,15 +831,35 @@ pub async fn create_monitor(State(st): State<AppState>, user: CurrentUser, Form(
     Ok(Redirect::to(&format!("/admin/monitors/{id}?notice=created")).into_response())
 }
 
-pub async fn edit_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>) -> AppResult<Response> {
-    let m = store::monitors::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+pub async fn edit_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    let m = store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let channels = store::monitors::channel_ids(st.db(), id).await?;
-    form_page(&st, &user, Some(id), MonitorForm::from_monitor(&m, channels), None).await
+    form_page(
+        &st,
+        &user,
+        Some(id),
+        MonitorForm::from_monitor(&m, channels),
+        None,
+    )
+    .await
 }
 
-pub async fn update_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<MonitorForm>) -> AppResult<Response> {
+pub async fn update_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<MonitorForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    store::monitors::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+    store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let input = match validate_with_groups(&st, &f, Some(id)).await? {
         Ok(i) => i,
         Err(e) => return form_page(&st, &user, Some(id), f, Some(e)).await,
@@ -671,16 +870,28 @@ pub async fn update_monitor(State(st): State<AppState>, user: CurrentUser, Path(
     Ok(Redirect::to(&format!("/admin/monitors/{id}?notice=saved")).into_response())
 }
 
-pub async fn toggle_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn toggle_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
-    let m = store::monitors::get(st.db(), id).await?.ok_or_else(AppError::not_found)?;
+    let m = store::monitors::get(st.db(), id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     store::monitors::set_active(st.db(), id, !m.active).await?;
     st.scheduler.reload(id).await?;
     let notice = if m.active { "paused" } else { "resumed" };
     Ok(Redirect::to(&format!("/admin/monitors/{id}?notice={notice}")).into_response())
 }
 
-pub async fn delete_monitor(State(st): State<AppState>, user: CurrentUser, Path(id): Path<i64>, Form(f): Form<CsrfForm>) -> AppResult<Response> {
+pub async fn delete_monitor(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
     user.check_csrf(&f.csrf)?;
     st.scheduler.stop(id).await;
     store::monitors::delete(st.db(), id).await?;
@@ -723,7 +934,9 @@ fn incident_rows(rows: Vec<store::heartbeats::IncidentRow>, now: i64) -> Vec<Inc
             parent: r.parent,
             group: r.group,
             started: format_ts(r.incident.started_at),
-            duration: format_duration_ms(r.incident.ended_at.unwrap_or(now) - r.incident.started_at),
+            duration: format_duration_ms(
+                r.incident.ended_at.unwrap_or(now) - r.incident.started_at,
+            ),
             ongoing: r.incident.ended_at.is_none(),
             message: r.incident.message,
         })
@@ -771,8 +984,14 @@ fn origin(st: &AppState, headers: &HeaderMap) -> String {
     if let Some(b) = st.ctx.base_url() {
         return b;
     }
-    let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("localhost");
-    let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()).unwrap_or("http");
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("http");
     format!("{proto}://{host}")
 }
 
@@ -784,7 +1003,9 @@ pub async fn monitor_detail(
     headers: HeaderMap,
 ) -> AppResult<Html<String>> {
     let db = st.db();
-    let m = store::monitors::get(db, id).await?.ok_or_else(AppError::not_found)?;
+    let m = store::monitors::get(db, id)
+        .await?
+        .ok_or_else(AppError::not_found)?;
     let now = now_ms();
     let (range, since, bucket) = match q.range.as_deref() {
         Some("7d") => ("7d", now - 7 * DAY_MS, HOUR_MS),
@@ -793,8 +1014,15 @@ pub async fn monitor_detail(
     };
     let points = stats::series(db, id, since, bucket).await?;
     let (phase_svg, phases) = charts::phase_breakdown(&points);
-    let (lat_sum, lat_n) = points.iter().filter_map(|p| p.total_ms.map(|t| (t * p.up as f64, p.up))).fold((0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-    let up = |since| async move { stats::uptime_all(db, since).await.map(|m| format_pct(m.get(&id).copied())) };
+    let (lat_sum, lat_n) = points
+        .iter()
+        .filter_map(|p| p.total_ms.map(|t| (t * p.up as f64, p.up)))
+        .fold((0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let up = |since| async move {
+        stats::uptime_all(db, since)
+            .await
+            .map(|m| format_pct(m.get(&id).copied()))
+    };
     let recent = store::heartbeats::recent(db, id, 60).await?;
     let mut oldest_first = recent.clone();
     oldest_first.reverse();
@@ -806,13 +1034,25 @@ pub async fn monitor_detail(
     };
     let cert_expiry = store::heartbeats::latest_cert_expiry(db, id).await?;
     let channel_ids = store::monitors::channel_ids(db, id).await?;
-    let channels = store::notifications::list(db).await?.into_iter().filter(|c| channel_ids.contains(&c.id)).map(|c| c.name).collect();
+    let channels = store::notifications::list(db)
+        .await?
+        .into_iter()
+        .filter(|c| channel_ids.contains(&c.id))
+        .map(|c| c.name)
+        .collect();
     let (ip, cp) = (q.ip.unwrap_or(1).max(1), q.cp.unwrap_or(1).max(1));
-    let (inc_rows, inc_total) = store::heartbeats::incidents_page(db, Some(id), false, ip, DETAIL_INCIDENTS_PER_PAGE).await?;
-    let incident_pager = views::Pager::new(inc_total, DETAIL_INCIDENTS_PER_PAGE, ip, |p| detail_link(range, p, cp, "incidents"));
+    let (inc_rows, inc_total) =
+        store::heartbeats::incidents_page(db, Some(id), false, ip, DETAIL_INCIDENTS_PER_PAGE)
+            .await?;
+    let incident_pager = views::Pager::new(inc_total, DETAIL_INCIDENTS_PER_PAGE, ip, |p| {
+        detail_link(range, p, cp, "incidents")
+    });
     let incidents = incident_rows(inc_rows, now);
-    let (check_rows, check_total) = store::heartbeats::checks_page(db, id, cp, DETAIL_CHECKS_PER_PAGE).await?;
-    let check_pager = views::Pager::new(check_total, DETAIL_CHECKS_PER_PAGE, cp, |p| detail_link(range, ip, p, "checks"));
+    let (check_rows, check_total) =
+        store::heartbeats::checks_page(db, id, cp, DETAIL_CHECKS_PER_PAGE).await?;
+    let check_pager = views::Pager::new(check_total, DETAIL_CHECKS_PER_PAGE, cp, |p| {
+        detail_link(range, ip, p, "checks")
+    });
     let checks = check_rows
         .iter()
         .map(|b| CheckRow {
@@ -827,7 +1067,10 @@ pub async fn monitor_detail(
         .collect();
     let all = store::monitors::list(db).await?;
     let latest = store::heartbeats::recent_all(db, 1).await?;
-    let parent = m.parent_id.and_then(|p| all.iter().find(|x| x.id == p)).map(|p| (p.id, p.name.clone()));
+    let parent = m
+        .parent_id
+        .and_then(|p| all.iter().find(|x| x.id == p))
+        .map(|p| (p.id, p.name.clone()));
     let children: Vec<ChildRow> = all
         .iter()
         .filter(|x| x.parent_id == Some(id))
@@ -838,10 +1081,19 @@ pub async fn monitor_detail(
                 (true, None) => ("s-none", "Waiting"),
                 (true, Some(s)) => (views::status_class(s), views::status_label(s)),
             };
-            ChildRow { id: x.id, name: x.name.clone(), status_class, status_label }
+            ChildRow {
+                id: x.id,
+                name: x.name.clone(),
+                status_class,
+                status_label,
+            }
         })
         .collect();
-    let push_url = m.push_token.as_ref().filter(|_| m.kind() == MonitorKind::Push).map(|t| format!("{}/api/push/{t}?status=up&msg=OK", origin(&st, &headers)));
+    let push_url = m
+        .push_token
+        .as_ref()
+        .filter(|_| m.kind() == MonitorKind::Push)
+        .map(|t| format!("{}/api/push/{t}?status=up&msg=OK", origin(&st, &headers)));
     let page = DetailPage {
         layout: Layout::admin(&m.name, &user, "monitors").with_notice(q.notice.as_deref()),
         kind_label: m.kind().label(),
@@ -855,13 +1107,21 @@ pub async fn monitor_detail(
         uptime_24h: up(now - DAY_MS).await?,
         uptime_7d: up(now - 7 * DAY_MS).await?,
         uptime_30d: up(now - 30 * DAY_MS).await?,
-        avg_latency: if lat_n > 0 { format_ms(Some(lat_sum / lat_n as f64)) } else { format_ms(None) },
+        avg_latency: if lat_n > 0 {
+            format_ms(Some(lat_sum / lat_n as f64))
+        } else {
+            format_ms(None)
+        },
         cert: views::cert_info(cert_expiry, now),
         cert_date: cert_expiry.map(format_ts).unwrap_or_default(),
         push_url,
         channels,
         group: match m.group_id {
-            Some(g) => store::groups::list(db).await?.into_iter().find(|x| x.id == g).map(|x| x.name),
+            Some(g) => store::groups::list(db)
+                .await?
+                .into_iter()
+                .find(|x| x.id == g)
+                .map(|x| x.name),
             None => None,
         },
         parent,
@@ -892,12 +1152,20 @@ struct IncidentsPage {
     ongoing_only: bool,
 }
 
-pub async fn incidents(State(st): State<AppState>, user: CurrentUser, Query(q): Query<IncidentsQuery>) -> AppResult<Html<String>> {
+pub async fn incidents(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<IncidentsQuery>,
+) -> AppResult<Html<String>> {
     let ongoing_only = q.ongoing.as_deref().is_some_and(|v| v == "1");
     let page = q.page.unwrap_or(1).max(1);
-    let (rows, total) = store::heartbeats::incidents_page(st.db(), None, ongoing_only, page, INCIDENTS_PER_PAGE).await?;
+    let (rows, total) =
+        store::heartbeats::incidents_page(st.db(), None, ongoing_only, page, INCIDENTS_PER_PAGE)
+            .await?;
     let filter = if ongoing_only { "&ongoing=1" } else { "" };
-    let pager = views::Pager::new(total, INCIDENTS_PER_PAGE, page, |p| format!("?page={p}{filter}"));
+    let pager = views::Pager::new(total, INCIDENTS_PER_PAGE, page, |p| {
+        format!("?page={p}{filter}")
+    });
     render(&IncidentsPage {
         layout: Layout::admin("Incidents", &user, "incidents"),
         rows: incident_rows(rows, now_ms()),
@@ -911,36 +1179,91 @@ mod tests {
     use super::*;
 
     fn form(kind: &str, target: &str) -> MonitorForm {
-        MonitorForm { name: "x".into(), kind: kind.into(), url: target.into(), host: target.into(), ..MonitorForm::default() }
+        MonitorForm {
+            name: "x".into(),
+            kind: kind.into(),
+            url: target.into(),
+            host: target.into(),
+            ..MonitorForm::default()
+        }
     }
 
     #[test]
     fn defaults_produce_a_valid_http_monitor() {
-        let i = form("http", "https://example.com/health").validate().unwrap();
-        assert_eq!((i.failure_threshold, i.interval_s, i.ip_family.as_str()), (3, 60, "auto"));
+        let i = form("http", "https://example.com/health")
+            .validate()
+            .unwrap();
+        assert_eq!(
+            (i.failure_threshold, i.interval_s, i.ip_family.as_str()),
+            (3, 60, "auto")
+        );
         assert!(i.active && i.follow_redirects && !i.public);
     }
 
     #[test]
     fn http_validation_errors_are_specific() {
-        assert!(form("http", "example.com").validate().unwrap_err().contains("URL"));
-        assert!(form("http", "ftp://example.com").validate().unwrap_err().contains("http"));
-        let f = MonitorForm { expected_status: "abc".into(), ..form("http", "https://e.com") };
+        assert!(
+            form("http", "example.com")
+                .validate()
+                .unwrap_err()
+                .contains("URL")
+        );
+        assert!(
+            form("http", "ftp://example.com")
+                .validate()
+                .unwrap_err()
+                .contains("http")
+        );
+        let f = MonitorForm {
+            expected_status: "abc".into(),
+            ..form("http", "https://e.com")
+        };
         assert!(f.validate().unwrap_err().contains("status"));
-        let f = MonitorForm { content_kind: "regex".into(), content_value: "(".into(), ..form("http", "https://e.com") };
+        let f = MonitorForm {
+            content_kind: "regex".into(),
+            content_value: "(".into(),
+            ..form("http", "https://e.com")
+        };
         assert!(f.validate().unwrap_err().contains("regex"));
-        let f = MonitorForm { interval_s: "1".into(), ..form("http", "https://e.com") };
+        let f = MonitorForm {
+            interval_s: "1".into(),
+            ..form("http", "https://e.com")
+        };
         assert!(f.validate().unwrap_err().contains("Interval"));
-        let f = MonitorForm { name: "  ".into(), ..form("http", "https://e.com") };
+        let f = MonitorForm {
+            name: "  ".into(),
+            ..form("http", "https://e.com")
+        };
         assert!(f.validate().unwrap_err().contains("Name"));
     }
 
     #[test]
     fn other_kinds_validate_their_own_fields() {
-        assert!(form("tcp", "db.local").validate().unwrap_err().contains("Port"));
-        assert_eq!(MonitorForm { port: "5432".into(), ..form("tcp", "db.local") }.validate().unwrap().port, Some(5432));
+        assert!(
+            form("tcp", "db.local")
+                .validate()
+                .unwrap_err()
+                .contains("Port")
+        );
+        assert_eq!(
+            MonitorForm {
+                port: "5432".into(),
+                ..form("tcp", "db.local")
+            }
+            .validate()
+            .unwrap()
+            .port,
+            Some(5432)
+        );
         assert!(form("ping", "").validate().is_err());
-        assert!(MonitorForm { dns_server: "dns.google".into(), ..form("dns", "example.com") }.validate().is_err());
+        assert!(
+            MonitorForm {
+                dns_server: "dns.google".into(),
+                ..form("dns", "example.com")
+            }
+            .validate()
+            .is_err()
+        );
         let push = form("push", "ignored").validate().unwrap();
         assert_eq!(push.target, "");
         assert!(form("smoke-signal", "x").validate().is_err());
@@ -960,8 +1283,14 @@ mod tests {
             ..MonitorForm::default()
         };
         let i = f.validate().unwrap();
-        assert_eq!((i.ssl_warn_days, i.retry_interval_s, i.timeout_s), (14, 60, 30));
-        let bad = MonitorForm { interval_s: "abc".into(), ..f };
+        assert_eq!(
+            (i.ssl_warn_days, i.retry_interval_s, i.timeout_s),
+            (14, 60, 30)
+        );
+        let bad = MonitorForm {
+            interval_s: "abc".into(),
+            ..f
+        };
         assert!(bad.validate().is_err(), "typed garbage is still rejected");
     }
 
@@ -981,47 +1310,130 @@ mod tests {
     fn mon(id: i64, group: Option<i64>, parent: Option<i64>) -> Monitor {
         let now = 0;
         Monitor {
-            id, name: format!("m{id}"), kind: "http".into(), target: String::new(), port: None, method: "GET".into(),
-            headers: String::new(), body: String::new(), interval_s: 60, retry_interval_s: 30, timeout_s: 10,
-            failure_threshold: 3, expected_status: "200-299".into(), ip_family: "auto".into(), follow_redirects: true,
-            ignore_tls: false, content_kind: "none".into(), content_value: String::new(), content_expected: String::new(),
-            ssl_warn_days: 14, dns_record_type: "A".into(), dns_server: String::new(), push_token: None, active: true,
-            public: false, ssl_notified_days: None, ssl_notified_expiry: None, created_at: now, updated_at: now,
-            group_id: group, public_name: String::new(), parent_id: parent,
+            id,
+            name: format!("m{id}"),
+            kind: "http".into(),
+            target: String::new(),
+            port: None,
+            method: "GET".into(),
+            headers: String::new(),
+            body: String::new(),
+            interval_s: 60,
+            retry_interval_s: 30,
+            timeout_s: 10,
+            failure_threshold: 3,
+            expected_status: "200-299".into(),
+            ip_family: "auto".into(),
+            follow_redirects: true,
+            ignore_tls: false,
+            content_kind: "none".into(),
+            content_value: String::new(),
+            content_expected: String::new(),
+            ssl_warn_days: 14,
+            dns_record_type: "A".into(),
+            dns_server: String::new(),
+            push_token: None,
+            active: true,
+            public: false,
+            ssl_notified_days: None,
+            ssl_notified_expiry: None,
+            created_at: now,
+            updated_at: now,
+            group_id: group,
+            public_name: String::new(),
+            parent_id: parent,
         }
     }
 
     #[test]
     fn dropping_on_a_monitor_nests_it_in_that_monitors_group() {
-        let all = [mon(1, Some(10), None), mon(2, Some(20), None), mon(3, Some(10), Some(1))];
-        assert_eq!(plan_move(&all, &[10, 20], 2, None, Some(1)), Ok((Some(10), Some(1))));
-        assert_eq!(plan_move(&all, &[10, 20], 3, Some(20), None), Ok((Some(20), None)), "dropping on a group un-nests");
-        assert_eq!(plan_move(&all, &[10, 20], 3, None, None), Ok((None, None)), "no group");
+        let all = [
+            mon(1, Some(10), None),
+            mon(2, Some(20), None),
+            mon(3, Some(10), Some(1)),
+        ];
+        assert_eq!(
+            plan_move(&all, &[10, 20], 2, None, Some(1)),
+            Ok((Some(10), Some(1)))
+        );
+        assert_eq!(
+            plan_move(&all, &[10, 20], 3, Some(20), None),
+            Ok((Some(20), None)),
+            "dropping on a group un-nests"
+        );
+        assert_eq!(
+            plan_move(&all, &[10, 20], 3, None, None),
+            Ok((None, None)),
+            "no group"
+        );
     }
 
     #[test]
     fn dropping_next_to_a_monitor_makes_it_a_sibling() {
-        let all = [mon(1, Some(10), None), mon(2, Some(20), None), mon(3, Some(10), Some(1)), mon(4, None, None)];
-        assert_eq!(plan_reorder(&all, &[10, 20], 4, 2, true), Ok((Some(20), None, Position::After(2))), "takes the anchor's group");
-        assert_eq!(plan_reorder(&all, &[10, 20], 4, 3, false), Ok((Some(10), Some(1), Position::Before(3))), "next to a sub-monitor nests it too");
-        assert!(plan_reorder(&all, &[10, 20], 1, 3, false).unwrap_err().contains("own parent"), "a parent cannot go beside its own child");
+        let all = [
+            mon(1, Some(10), None),
+            mon(2, Some(20), None),
+            mon(3, Some(10), Some(1)),
+            mon(4, None, None),
+        ];
+        assert_eq!(
+            plan_reorder(&all, &[10, 20], 4, 2, true),
+            Ok((Some(20), None, Position::After(2))),
+            "takes the anchor's group"
+        );
+        assert_eq!(
+            plan_reorder(&all, &[10, 20], 4, 3, false),
+            Ok((Some(10), Some(1), Position::Before(3))),
+            "next to a sub-monitor nests it too"
+        );
+        assert!(
+            plan_reorder(&all, &[10, 20], 1, 3, false)
+                .unwrap_err()
+                .contains("own parent"),
+            "a parent cannot go beside its own child"
+        );
         assert!(plan_reorder(&all, &[10, 20], 2, 2, false).is_err());
         assert!(plan_reorder(&all, &[10, 20], 2, 99, false).is_err());
     }
 
     #[test]
     fn invalid_drops_are_rejected() {
-        let all = [mon(1, None, None), mon(2, None, None), mon(3, None, Some(1))];
-        assert!(plan_move(&all, &[], 1, None, Some(1)).unwrap_err().contains("own parent"));
-        assert!(plan_move(&all, &[], 2, None, Some(3)).unwrap_err().contains("only one level"));
-        assert!(plan_move(&all, &[], 1, None, Some(2)).unwrap_err().contains("has sub-monitors"));
-        assert!(plan_move(&all, &[], 2, Some(99), None).unwrap_err().contains("no longer exists"));
+        let all = [
+            mon(1, None, None),
+            mon(2, None, None),
+            mon(3, None, Some(1)),
+        ];
+        assert!(
+            plan_move(&all, &[], 1, None, Some(1))
+                .unwrap_err()
+                .contains("own parent")
+        );
+        assert!(
+            plan_move(&all, &[], 2, None, Some(3))
+                .unwrap_err()
+                .contains("only one level")
+        );
+        assert!(
+            plan_move(&all, &[], 1, None, Some(2))
+                .unwrap_err()
+                .contains("has sub-monitors")
+        );
+        assert!(
+            plan_move(&all, &[], 2, Some(99), None)
+                .unwrap_err()
+                .contains("no longer exists")
+        );
         assert!(plan_move(&all, &[], 42, None, None).is_err());
     }
 
     #[test]
     fn content_checks_are_dropped_for_non_http() {
-        let f = MonitorForm { content_kind: "contains".into(), content_value: "ok".into(), port: "22".into(), ..form("tcp", "h") };
+        let f = MonitorForm {
+            content_kind: "contains".into(),
+            content_value: "ok".into(),
+            port: "22".into(),
+            ..form("tcp", "h")
+        };
         assert_eq!(f.validate().unwrap().content_kind, "none");
     }
 }

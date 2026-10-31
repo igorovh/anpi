@@ -23,7 +23,14 @@ pub struct MonitorEvent {
 }
 
 impl MonitorEvent {
-    pub fn new(monitor_id: i64, public: bool, status: Status, latency_ms: Option<f64>, message: &str, ts: i64) -> Self {
+    pub fn new(
+        monitor_id: i64,
+        public: bool,
+        status: Status,
+        latency_ms: Option<f64>,
+        message: &str,
+        ts: i64,
+    ) -> Self {
         Self {
             monitor_id,
             public,
@@ -37,6 +44,9 @@ impl MonitorEvent {
 
     /// Public pages must not leak error details such as internal IPs.
     pub fn redacted(&self) -> Self {
-        Self { message: String::new(), ..self.clone() }
+        Self {
+            message: String::new(),
+            ..self.clone()
+        }
     }
 }

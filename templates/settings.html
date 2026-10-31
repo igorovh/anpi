@@ -172,6 +172,7 @@
     <input type="hidden" name="csrf" value="{{ layout.csrf }}">
     <div class="row">
       <label class="grow">Token name<input name="name" autocomplete="off" maxlength="60" placeholder="terraform" required></label>
+      <label><input type="checkbox" name="allow_sso"> Allow SSO changes (controls panel sign-in)</label>
       <div class="form-actions"><button type="submit" class="btn">Create token</button></div>
     </div>
   </form>

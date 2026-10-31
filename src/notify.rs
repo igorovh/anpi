@@ -44,11 +44,15 @@ impl NotifyEvent {
 
     /// "Group › Parent › Monitor", leaving out the parts a monitor does not have.
     pub fn label(&self) -> String {
-        [self.group_name.as_deref(), self.parent_name.as_deref(), Some(self.monitor_name.as_str())]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" › ")
+        [
+            self.group_name.as_deref(),
+            self.parent_name.as_deref(),
+            Some(self.monitor_name.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" › ")
     }
 
     pub fn title(&self) -> String {
@@ -56,8 +60,12 @@ impl NotifyEvent {
         match &self.kind {
             EventKind::Down => format!("🔴 {n} is down"),
             EventKind::Up { .. } => format!("🟢 {n} is back up"),
-            EventKind::SslExpiring { days_left, .. } if *days_left < 0 => format!("⚠️ {n}: certificate expired"),
-            EventKind::SslExpiring { days_left, .. } => format!("⚠️ {n}: certificate expires in {days_left} days"),
+            EventKind::SslExpiring { days_left, .. } if *days_left < 0 => {
+                format!("⚠️ {n}: certificate expired")
+            }
+            EventKind::SslExpiring { days_left, .. } => {
+                format!("⚠️ {n}: certificate expires in {days_left} days")
+            }
             EventKind::Test => "anpi test notification".to_string(),
             EventKind::Report(r) => r.title(),
         }
@@ -72,8 +80,12 @@ impl NotifyEvent {
             lines.push(self.message.clone());
         }
         match &self.kind {
-            EventKind::Up { downtime_ms: Some(d) } => lines.push(format!("Downtime: {}", format_duration_ms(*d))),
-            EventKind::SslExpiring { expires_at, .. } => lines.push(format!("Expires: {}", format_ts(*expires_at))),
+            EventKind::Up {
+                downtime_ms: Some(d),
+            } => lines.push(format!("Downtime: {}", format_duration_ms(*d))),
+            EventKind::SslExpiring { expires_at, .. } => {
+                lines.push(format!("Expires: {}", format_ts(*expires_at)))
+            }
             _ => {}
         }
         if !self.target.is_empty() {
@@ -95,8 +107,13 @@ impl NotifyEvent {
     }
 }
 
-pub const KINDS: [(&str, &str); 5] =
-    [("discord", "Discord"), ("telegram", "Telegram"), ("ntfy", "ntfy"), ("email", "E-mail (SMTP)"), ("webhook", "Webhook (JSON)")];
+pub const KINDS: [(&str, &str); 5] = [
+    ("discord", "Discord"),
+    ("telegram", "Telegram"),
+    ("ntfy", "ntfy"),
+    ("email", "E-mail (SMTP)"),
+    ("webhook", "Webhook (JSON)"),
+];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -131,10 +148,21 @@ impl ChannelConfig {
 
     pub fn validate(&self, kind: &str) -> Result<(), String> {
         let need_url = |v: &str, field: &str| -> Result<(), String> {
-            let u = url::Url::parse(v).map_err(|_| format!("{field} must be a full http(s) URL"))?;
-            if matches!(u.scheme(), "http" | "https") { Ok(()) } else { Err(format!("{field} must use http or https")) }
+            let u =
+                url::Url::parse(v).map_err(|_| format!("{field} must be a full http(s) URL"))?;
+            if matches!(u.scheme(), "http" | "https") {
+                Ok(())
+            } else {
+                Err(format!("{field} must use http or https"))
+            }
         };
-        let need = |v: &str, field: &str| if v.trim().is_empty() { Err(format!("{field} is required")) } else { Ok(()) };
+        let need = |v: &str, field: &str| {
+            if v.trim().is_empty() {
+                Err(format!("{field} is required"))
+            } else {
+                Ok(())
+            }
+        };
         match kind {
             "discord" => need_url(&self.webhook_url, "Webhook URL"),
             "telegram" => need(&self.bot_token, "Bot token").and(need(&self.chat_id, "Chat ID")),
@@ -147,7 +175,9 @@ impl ChannelConfig {
             }
             "email" => {
                 need(&self.smtp_host, "SMTP host")?;
-                self.smtp_port.parse::<u16>().map_err(|_| "SMTP port must be a number".to_string())?;
+                self.smtp_port
+                    .parse::<u16>()
+                    .map_err(|_| "SMTP port must be a number".to_string())?;
                 need(&self.email_from, "From")?;
                 need(&self.email_to, "To")
             }
@@ -157,9 +187,15 @@ impl ChannelConfig {
     }
 }
 
-async fn post_json(url: &str, body: serde_json::Value, extra: &[(&str, String)]) -> Result<(), String> {
+async fn post_json(
+    url: &str,
+    body: serde_json::Value,
+    extra: &[(&str, String)],
+) -> Result<(), String> {
     let url = url::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
-    let mut spec = RequestSpec::new(Method::POST, url).header(CONTENT_TYPE, "application/json").body(body.to_string());
+    let mut spec = RequestSpec::new(Method::POST, url)
+        .header(CONTENT_TYPE, "application/json")
+        .body(body.to_string());
     for (k, v) in extra {
         if let Ok(name) = http::HeaderName::from_bytes(k.as_bytes()) {
             spec = spec.header(name, v);
@@ -180,7 +216,23 @@ async fn post_json(url: &str, body: serde_json::Value, extra: &[(&str, String)])
 fn discord_escape(s: &str, limit: usize) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars().take(limit) {
-        if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '[' | ']' | '(' | ')' | '#' | '-' | '@' | '<') {
+        if matches!(
+            c,
+            '\\' | '*'
+                | '_'
+                | '~'
+                | '`'
+                | '|'
+                | '>'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '#'
+                | '-'
+                | '@'
+                | '<'
+        ) {
             out.push('\\');
         }
         out.push(c);
@@ -189,7 +241,9 @@ fn discord_escape(s: &str, limit: usize) -> String {
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Result<(), String> {
@@ -197,7 +251,10 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
         "discord" => {
             let ts = time::OffsetDateTime::from_unix_timestamp(ev.at / 1000)
                 .ok()
-                .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok());
+                .and_then(|t| {
+                    t.format(&time::format_description::well_known::Rfc3339)
+                        .ok()
+                });
             let payload = json!({
                 "username": if cfg.username.is_empty() { "anpi" } else { cfg.username.as_str() },
                 "embeds": [{
@@ -212,13 +269,30 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
             post_json(&cfg.webhook_url, payload, &[]).await
         }
         "telegram" => {
-            let base = if cfg.api_base.is_empty() { "https://api.telegram.org" } else { cfg.api_base.trim_end_matches('/') };
-            let text = format!("<b>{}</b>\n{}", html_escape(&ev.title()), html_escape(&ev.body()));
+            let base = if cfg.api_base.is_empty() {
+                "https://api.telegram.org"
+            } else {
+                cfg.api_base.trim_end_matches('/')
+            };
+            let text = format!(
+                "<b>{}</b>\n{}",
+                html_escape(&ev.title()),
+                html_escape(&ev.body())
+            );
             let payload = json!({ "chat_id": cfg.chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true });
-            post_json(&format!("{base}/bot{}/sendMessage", cfg.bot_token), payload, &[]).await
+            post_json(
+                &format!("{base}/bot{}/sendMessage", cfg.bot_token),
+                payload,
+                &[],
+            )
+            .await
         }
         "ntfy" => {
-            let server = if cfg.server.is_empty() { "https://ntfy.sh" } else { cfg.server.trim_end_matches('/') };
+            let server = if cfg.server.is_empty() {
+                "https://ntfy.sh"
+            } else {
+                cfg.server.trim_end_matches('/')
+            };
             let priority: u8 = match ev.kind {
                 _ if !cfg.priority.is_empty() => cfg.priority.parse().unwrap_or(3),
                 EventKind::Down => 5,
@@ -233,13 +307,18 @@ pub async fn send_one(kind: &str, cfg: &ChannelConfig, ev: &NotifyEvent) -> Resu
                 EventKind::Report(_) => "bar_chart",
             };
             let payload = json!({ "topic": cfg.topic, "title": ev.title(), "message": ev.body(), "priority": priority, "tags": [tag] });
-            let auth: Vec<(&str, String)> =
-                if cfg.token.is_empty() { vec![] } else { vec![("authorization", format!("Bearer {}", cfg.token))] };
+            let auth: Vec<(&str, String)> = if cfg.token.is_empty() {
+                vec![]
+            } else {
+                vec![("authorization", format!("Bearer {}", cfg.token))]
+            };
             post_json(server, payload, &auth).await
         }
         "webhook" => {
             let payload = match &ev.kind {
-                EventKind::Report(r) => json!({ "event": ev.code(), "title": ev.title(), "message": ev.body(), "report": r, "at": ev.at }),
+                EventKind::Report(r) => {
+                    json!({ "event": ev.code(), "title": ev.title(), "message": ev.body(), "report": r, "at": ev.at })
+                }
                 _ => json!({
                     "event": ev.code(),
                     "title": ev.title(),
@@ -261,25 +340,46 @@ async fn send_email(cfg: &ChannelConfig, ev: &NotifyEvent) -> Result<(), String>
     use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
     let mut builder = Message::builder()
-        .from(cfg.email_from.parse().map_err(|e| format!("invalid From address: {e}"))?)
+        .from(
+            cfg.email_from
+                .parse()
+                .map_err(|e| format!("invalid From address: {e}"))?,
+        )
         .subject(ev.title())
         .header(ContentType::TEXT_PLAIN);
-    for to in cfg.email_to.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.to(to.parse().map_err(|e| format!("invalid To address {to}: {e}"))?);
+    for to in cfg
+        .email_to
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        builder = builder.to(to
+            .parse()
+            .map_err(|e| format!("invalid To address {to}: {e}"))?);
     }
     let message = builder.body(ev.body()).map_err(|e| e.to_string())?;
     let port: u16 = cfg.smtp_port.parse().unwrap_or(587);
     let mut transport = match cfg.smtp_security.as_str() {
-        "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.smtp_host).map_err(|e| e.to_string())?,
+        "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.smtp_host)
+            .map_err(|e| e.to_string())?,
         "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.smtp_host),
-        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.smtp_host).map_err(|e| e.to_string())?,
+        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.smtp_host)
+            .map_err(|e| e.to_string())?,
     }
     .port(port)
     .timeout(Some(Duration::from_secs(20)));
     if !cfg.smtp_username.is_empty() {
-        transport = transport.credentials(Credentials::new(cfg.smtp_username.clone(), cfg.smtp_password.clone()));
+        transport = transport.credentials(Credentials::new(
+            cfg.smtp_username.clone(),
+            cfg.smtp_password.clone(),
+        ));
     }
-    transport.build().send(message).await.map(|_| ()).map_err(|e| e.to_string())
+    transport
+        .build()
+        .send(message)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 pub async fn send_channel(ch: &NotificationChannel, ev: &NotifyEvent) -> Result<(), String> {
@@ -308,23 +408,57 @@ mod tests {
     use super::*;
 
     fn ev(kind: EventKind) -> NotifyEvent {
-        NotifyEvent { kind, monitor_name: "API".into(), parent_name: None, group_name: None, target: "https://api.example.com".into(), message: "HTTP 503".into(), at: 0 }
+        NotifyEvent {
+            kind,
+            monitor_name: "API".into(),
+            parent_name: None,
+            group_name: None,
+            target: "https://api.example.com".into(),
+            message: "HTTP 503".into(),
+            at: 0,
+        }
     }
 
     #[test]
     fn titles_and_bodies_describe_the_event() {
         assert_eq!(ev(EventKind::Down).title(), "🔴 API is down");
-        let child = NotifyEvent { parent_name: Some("Shop".into()), ..ev(EventKind::Down) };
-        assert_eq!(child.title(), "🔴 Shop › API is down", "sub-monitors name their parent");
-        let grouped = NotifyEvent { group_name: Some("Product".into()), ..child };
-        assert_eq!(grouped.title(), "🔴 Product › Shop › API is down", "the group comes first");
-        let up = ev(EventKind::Up { downtime_ms: Some(125_000) });
+        let child = NotifyEvent {
+            parent_name: Some("Shop".into()),
+            ..ev(EventKind::Down)
+        };
+        assert_eq!(
+            child.title(),
+            "🔴 Shop › API is down",
+            "sub-monitors name their parent"
+        );
+        let grouped = NotifyEvent {
+            group_name: Some("Product".into()),
+            ..child
+        };
+        assert_eq!(
+            grouped.title(),
+            "🔴 Product › Shop › API is down",
+            "the group comes first"
+        );
+        let up = ev(EventKind::Up {
+            downtime_ms: Some(125_000),
+        });
         assert!(up.title().contains("back up"));
         assert!(up.body().contains("Downtime: 2m 5s"));
         assert!(up.body().contains("Target: https://api.example.com"));
-        let ssl = ev(EventKind::SslExpiring { days_left: 6, expires_at: 0 });
+        let ssl = ev(EventKind::SslExpiring {
+            days_left: 6,
+            expires_at: 0,
+        });
         assert!(ssl.title().contains("expires in 6 days"));
-        assert!(ev(EventKind::SslExpiring { days_left: -1, expires_at: 0 }).title().contains("expired"));
+        assert!(
+            ev(EventKind::SslExpiring {
+                days_left: -1,
+                expires_at: 0
+            })
+            .title()
+            .contains("expired")
+        );
     }
 
     #[test]
@@ -336,27 +470,51 @@ mod tests {
         c.webhook_url = "https://discord.com/api/webhooks/1/abc".into();
         assert!(c.validate("discord").is_ok());
 
-        let t = ChannelConfig { bot_token: "1:x".into(), ..Default::default() };
+        let t = ChannelConfig {
+            bot_token: "1:x".into(),
+            ..Default::default()
+        };
         assert!(t.validate("telegram").unwrap_err().contains("Chat ID"));
 
-        let e = ChannelConfig { smtp_host: "smtp".into(), smtp_port: "x".into(), ..Default::default() };
+        let e = ChannelConfig {
+            smtp_host: "smtp".into(),
+            smtp_port: "x".into(),
+            ..Default::default()
+        };
         assert!(e.validate("email").unwrap_err().contains("port"));
         assert!(ChannelConfig::default().validate("carrier-pigeon").is_err());
     }
 
     #[test]
     fn config_roundtrips_through_json_and_tolerates_garbage() {
-        let c = ChannelConfig { topic: "alerts".into(), server: "https://ntfy.example".into(), ..Default::default() };
+        let c = ChannelConfig {
+            topic: "alerts".into(),
+            server: "https://ntfy.example".into(),
+            ..Default::default()
+        };
         assert_eq!(ChannelConfig::from_json(&c.to_json()), c);
-        assert_eq!(ChannelConfig::from_json("not json"), ChannelConfig::default());
+        assert_eq!(
+            ChannelConfig::from_json("not json"),
+            ChannelConfig::default()
+        );
     }
 
     #[test]
     fn discord_text_cannot_inject_links_or_mentions() {
-        let e = discord_escape("JSONPath $.x = \"[click](https://evil.example)\" @everyone", 1500);
-        assert!(!e.contains("[click](") && e.contains("\\[click\\]\\("), "{e}");
+        let e = discord_escape(
+            "JSONPath $.x = \"[click](https://evil.example)\" @everyone",
+            1500,
+        );
+        assert!(
+            !e.contains("[click](") && e.contains("\\[click\\]\\("),
+            "{e}"
+        );
         assert!(e.contains("\\@everyone"));
-        assert_eq!(discord_escape(&"x".repeat(5000), 1500).len(), 1500, "long remote text is truncated");
+        assert_eq!(
+            discord_escape(&"x".repeat(5000), 1500).len(),
+            1500,
+            "long remote text is truncated"
+        );
     }
 
     #[test]

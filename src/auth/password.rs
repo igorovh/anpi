@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use argon2::Argon2;
-use tokio::sync::Semaphore;
 use argon2::password_hash::phc::PasswordHash;
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use tokio::sync::Semaphore;
 
 pub const MIN_LENGTH: usize = 10;
 
@@ -22,8 +22,13 @@ impl std::fmt::Display for Busy {
 
 impl std::error::Error for Busy {}
 
-async fn off_runtime<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T, Busy> {
-    let _permit = tokio::time::timeout(PERMIT_WAIT, HASH_PERMITS.acquire()).await.map_err(|_| Busy)?.map_err(|_| Busy)?;
+async fn off_runtime<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Busy> {
+    let _permit = tokio::time::timeout(PERMIT_WAIT, HASH_PERMITS.acquire())
+        .await
+        .map_err(|_| Busy)?
+        .map_err(|_| Busy)?;
     tokio::task::spawn_blocking(work).await.map_err(|_| Busy)
 }
 
@@ -46,12 +51,17 @@ pub async fn hash_async(password: &str) -> anyhow::Result<String> {
 }
 
 pub fn hash(password: &str) -> anyhow::Result<String> {
-    Argon2::default().hash_password(password.as_bytes()).map(|h| h.to_string()).map_err(|e| anyhow::anyhow!("hashing failed: {e}"))
+    Argon2::default()
+        .hash_password(password.as_bytes())
+        .map(|h| h.to_string())
+        .map_err(|e| anyhow::anyhow!("hashing failed: {e}"))
 }
 
 pub fn verify(password: &str, phc: &str) -> bool {
     match PasswordHash::new(phc) {
-        Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
         Err(_) => false,
     }
 }
@@ -89,9 +99,16 @@ mod tests {
     #[tokio::test]
     async fn async_variants_match_the_blocking_ones() {
         let h = hash_async("correct horse battery").await.unwrap();
-        assert_eq!(verify_async("correct horse battery", Some(&h)).await, Ok(true));
+        assert_eq!(
+            verify_async("correct horse battery", Some(&h)).await,
+            Ok(true)
+        );
         assert_eq!(verify_async("wrong", Some(&h)).await, Ok(false));
-        assert_eq!(verify_async("anything", None).await, Ok(false), "unknown users still fail");
+        assert_eq!(
+            verify_async("anything", None).await,
+            Ok(false),
+            "unknown users still fail"
+        );
     }
 
     #[tokio::test]
@@ -101,7 +118,10 @@ mod tests {
         let flag = ran.clone();
         tokio::spawn(async move { flag.store(true, std::sync::atomic::Ordering::SeqCst) });
         verify_async("x", None).await.unwrap();
-        assert!(ran.load(std::sync::atomic::Ordering::SeqCst), "another task ran while the hash was computed");
+        assert!(
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            "another task ran while the hash was computed"
+        );
     }
 
     #[test]

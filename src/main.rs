@@ -10,7 +10,7 @@ const USAGE: &str = "usage:
   anpi healthcheck              exit 0 if the local server answers /healthz
   anpi reset-password <user>    set a new password (read from stdin)
   anpi disable-sso              turn off SSO set in the panel so passwords work again
-  anpi api-token <name>         create an API token for the REST API and Terraform (printed once)
+  anpi api-token <name> [--allow-sso]  create an API token (printed once)
   anpi demo                     fill an empty database with example monitors and history
   anpi export [file]            write the configuration as JSON (stdout by default)
   anpi import <file> [--replace]  load a configuration export
@@ -22,7 +22,10 @@ const USAGE: &str = "usage:
 #[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_env("ANPI_LOG").unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn")))
+        .with_env_filter(
+            EnvFilter::try_from_env("ANPI_LOG")
+                .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn")),
+        )
         .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -48,12 +51,21 @@ async fn main() -> ExitCode {
         Some("healthcheck") => healthcheck(&config).await,
         Some("reset-password") => match args.get(1) {
             Some(user) => reset_password(&config, user).await,
-            None => Err(anyhow::anyhow!(USAGE)),
+            _ => Err(anyhow::anyhow!(USAGE)),
         },
         Some("disable-sso") => disable_sso(&config).await,
         Some("api-token") => match args.get(1) {
-            Some(name) => api_token(&config, name).await,
-            None => Err(anyhow::anyhow!(USAGE)),
+            Some(name)
+                if args[2..].iter().all(|arg| arg == "--allow-sso") && !name.starts_with('-') =>
+            {
+                api_token(
+                    &config,
+                    name,
+                    args[2..].iter().any(|arg| arg == "--allow-sso"),
+                )
+                .await
+            }
+            _ => Err(anyhow::anyhow!(USAGE)),
         },
         Some("demo") => demo(&config).await,
         Some("export") => export(&config, args.get(1)).await,
@@ -80,15 +92,24 @@ async fn update(args: &[String]) -> anyhow::Result<()> {
     use anpi::update::{self, CURRENT, parse_version};
     use anyhow::Context;
     let flag = |f: &str| args.iter().any(|a| a == f);
-    let wanted = args.iter().position(|a| a == "--version").map(|i| args.get(i + 1).context(USAGE)).transpose()?;
-    if let Some(a) = args.iter().find(|a| a.starts_with("--") && !["--check", "--version", "--no-restart", "--rollback"].contains(&a.as_str())) {
+    let wanted = args
+        .iter()
+        .position(|a| a == "--version")
+        .map(|i| args.get(i + 1).context(USAGE))
+        .transpose()?;
+    if let Some(a) = args.iter().find(|a| {
+        a.starts_with("--")
+            && !["--check", "--version", "--no-restart", "--rollback"].contains(&a.as_str())
+    }) {
         anyhow::bail!("unknown option {a}\n{USAGE}");
     }
     let exe = std::env::current_exe()?.canonicalize()?;
 
     if flag("--rollback") {
         update::rollback(&exe)?;
-        eprintln!("restored the previous binary; if the database was upgraded, its backup sits next to it as *.before-<version>");
+        eprintln!(
+            "restored the previous binary; if the database was upgraded, its backup sits next to it as *.before-<version>"
+        );
         return restart(flag("--no-restart"));
     }
     let release = update::fetch_release(wanted.map(String::as_str)).await?;
@@ -99,7 +120,10 @@ async fn update(args: &[String]) -> anyhow::Result<()> {
     if flag("--check") {
         println!("installed {CURRENT}, latest {tag}");
         if latest > current {
-            println!("changes: {}\nrun `sudo anpi update` to install it", release.html_url);
+            println!(
+                "changes: {}\nrun `sudo anpi update` to install it",
+                release.html_url
+            );
         }
         return Ok(());
     }
@@ -113,21 +137,38 @@ async fn update(args: &[String]) -> anyhow::Result<()> {
     }
 
     let target = update::TARGET.context("self-update supports Linux (x86_64, arm64) and macOS on Apple Silicon; download other builds from the releases page")?;
-    let (archive, sum) = release.archive_for(target).with_context(|| format!("release {tag} has no {target} build with a checksum"))?;
+    let (archive, sum) = release
+        .archive_for(target)
+        .with_context(|| format!("release {tag} has no {target} build with a checksum"))?;
     eprintln!("downloading anpi {tag} for {target}…");
-    let data = update::download(&archive.browser_download_url, "application/octet-stream", 256 * 1024 * 1024).await?;
+    let data = update::download(
+        &archive.browser_download_url,
+        "application/octet-stream",
+        256 * 1024 * 1024,
+    )
+    .await?;
     let sum = update::download(&sum.browser_download_url, "application/octet-stream", 4096).await?;
     update::verify_sha256(&data, &String::from_utf8_lossy(&sum))?;
     let binary = update::extract_binary(&data)?;
     update::replace_binary(&exe, &binary)?;
 
     // Refuse a binary that cannot even report its version, e.g. a wrong architecture.
-    let reported = std::process::Command::new(&exe).arg("version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let reported = std::process::Command::new(&exe)
+        .arg("version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     if reported.as_deref() != Some(tag.as_str()) {
         update::rollback(&exe)?;
-        anyhow::bail!("the new binary did not start correctly (reported {reported:?}); kept {CURRENT}");
+        anyhow::bail!(
+            "the new binary did not start correctly (reported {reported:?}); kept {CURRENT}"
+        );
     }
-    eprintln!("updated {CURRENT} → {tag} ({}); the previous binary is kept as {}", exe.display(), update::backup_path(&exe).display());
+    eprintln!(
+        "updated {CURRENT} → {tag} ({}); the previous binary is kept as {}",
+        exe.display(),
+        update::backup_path(&exe).display()
+    );
     restart(flag("--no-restart"))
 }
 
@@ -135,13 +176,23 @@ async fn update(args: &[String]) -> anyhow::Result<()> {
 fn restart(skip: bool) -> anyhow::Result<()> {
     use std::process::Command;
     let under_systemd = std::path::Path::new("/run/systemd/system").exists();
-    let active = under_systemd && Command::new("systemctl").args(["is-active", "--quiet", "anpi"]).status().is_ok_and(|s| s.success());
+    let active = under_systemd
+        && Command::new("systemctl")
+            .args(["is-active", "--quiet", "anpi"])
+            .status()
+            .is_ok_and(|s| s.success());
     if skip || !active {
         eprintln!("restart anpi to run the new version");
         return Ok(());
     }
-    let ok = Command::new("systemctl").args(["restart", "anpi"]).status().is_ok_and(|s| s.success());
-    anyhow::ensure!(ok, "the binary was replaced but `systemctl restart anpi` failed; run it yourself");
+    let ok = Command::new("systemctl")
+        .args(["restart", "anpi"])
+        .status()
+        .is_ok_and(|s| s.success());
+    anyhow::ensure!(
+        ok,
+        "the binary was replaced but `systemctl restart anpi` failed; run it yourself"
+    );
     eprintln!("restarted anpi.service");
     Ok(())
 }
@@ -172,7 +223,9 @@ async fn export(config: &Config, file: Option<&String>) -> anyhow::Result<()> {
 async fn import(config: &Config, file: &str, replace: bool) -> anyhow::Result<()> {
     let json = std::fs::read_to_string(file)?;
     let db = anpi::db::open(&config.database_path).await?;
-    let report = anpi::web::backup::import(&db, &json, replace).await.map_err(anyhow::Error::msg)?;
+    let report = anpi::web::backup::import(&db, &json, replace)
+        .await
+        .map_err(anyhow::Error::msg)?;
     eprintln!(
         "imported {} monitors, {} channels and {} groups; restart anpi to start the new checks",
         report.monitors_created, report.channels_created, report.groups_created
@@ -186,7 +239,10 @@ async fn import(config: &Config, file: &str, replace: bool) -> anyhow::Result<()
 async fn demo(config: &Config) -> anyhow::Result<()> {
     let db = anpi::db::open(&config.database_path).await?;
     let n = anpi::demo::seed(&db).await?;
-    eprintln!("added {n} example monitors with 30 days of history to {}", config.database_path.display());
+    eprintln!(
+        "added {n} example monitors with 30 days of history to {}",
+        config.database_path.display()
+    );
     Ok(())
 }
 
@@ -196,23 +252,32 @@ async fn disable_sso(config: &Config) -> anyhow::Result<()> {
     }
     let db = anpi::db::open(&config.database_path).await?;
     anpi::auth::sso::disable(&db).await?;
-    eprintln!("SSO turned off; restart anpi and sign in with a password (see `anpi reset-password` if needed)");
+    eprintln!(
+        "SSO turned off; restart anpi and sign in with a password (see `anpi reset-password` if needed)"
+    );
     Ok(())
 }
 
-async fn api_token(config: &Config, name: &str) -> anyhow::Result<()> {
+async fn api_token(config: &Config, name: &str, allow_sso: bool) -> anyhow::Result<()> {
     let name = name.trim();
-    anyhow::ensure!(!name.is_empty() && name.chars().count() <= 60, "the token name must be 1 to 60 characters");
+    anyhow::ensure!(
+        !name.is_empty() && name.chars().count() <= 60,
+        "the token name must be 1 to 60 characters"
+    );
     let db = anpi::db::open(&config.database_path).await?;
-    let (_, token) = anpi::store::api_tokens::create(&db, name).await?;
-    eprintln!("API token \"{name}\" created; it is not shown again, revoke it under Settings → API tokens");
+    let (_, token) = anpi::store::api_tokens::create_with_sso(&db, name, allow_sso).await?;
+    eprintln!(
+        "API token \"{name}\" created; it is not shown again, revoke it under Settings → API tokens"
+    );
     println!("{token}");
     Ok(())
 }
 
 async fn reset_password(config: &Config, username: &str) -> anyhow::Result<()> {
     let db = anpi::db::open(&config.database_path).await?;
-    let user = anpi::store::users::by_username(&db, username).await?.ok_or_else(|| anyhow::anyhow!("no user named {username}"))?;
+    let user = anpi::store::users::by_username(&db, username)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no user named {username}"))?;
     eprintln!("new password for {username}:");
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;

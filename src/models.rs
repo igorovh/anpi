@@ -59,7 +59,15 @@ pub enum MonitorKind {
 }
 
 impl MonitorKind {
-    pub const ALL: [MonitorKind; 7] = [Self::Http, Self::WebSocket, Self::Tcp, Self::Ping, Self::Dns, Self::Push, Self::Aggregate];
+    pub const ALL: [MonitorKind; 7] = [
+        Self::Http,
+        Self::WebSocket,
+        Self::Tcp,
+        Self::Ping,
+        Self::Dns,
+        Self::Push,
+        Self::Aggregate,
+    ];
 
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
@@ -202,7 +210,11 @@ pub struct Monitor {
 impl Monitor {
     /// Name shown on the public status page.
     pub fn public_label(&self) -> &str {
-        if self.public_name.trim().is_empty() { &self.name } else { self.public_name.trim() }
+        if self.public_name.trim().is_empty() {
+            &self.name
+        } else {
+            self.public_name.trim()
+        }
     }
 
     pub fn kind(&self) -> MonitorKind {
@@ -344,7 +356,11 @@ pub struct CheckOutcome {
 
 impl CheckOutcome {
     pub fn fail(message: impl Into<String>) -> Self {
-        Self { ok: false, message: message.into(), ..Default::default() }
+        Self {
+            ok: false,
+            message: message.into(),
+            ..Default::default()
+        }
     }
 }
 
@@ -437,9 +453,18 @@ mod tests {
 
     #[test]
     fn worst_status_prefers_outages() {
-        assert_eq!(Status::worst([Status::Up, Status::Pending, Status::Maintenance]), Some(Status::Pending));
-        assert_eq!(Status::worst([Status::Up, Status::Down, Status::Pending]), Some(Status::Down));
-        assert_eq!(Status::worst([Status::Up, Status::Maintenance]), Some(Status::Maintenance));
+        assert_eq!(
+            Status::worst([Status::Up, Status::Pending, Status::Maintenance]),
+            Some(Status::Pending)
+        );
+        assert_eq!(
+            Status::worst([Status::Up, Status::Down, Status::Pending]),
+            Some(Status::Down)
+        );
+        assert_eq!(
+            Status::worst([Status::Up, Status::Maintenance]),
+            Some(Status::Maintenance)
+        );
         assert_eq!(Status::worst([]), None);
     }
 }

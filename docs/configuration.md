@@ -2,6 +2,8 @@
 
 [← Back to the README](../README.md)
 
+SSO can also be managed through the REST API and Terraform. Create a token with **Allow SSO changes** in Settings → API tokens, or run `anpi api-token terraform --allow-sso`. This permission grants control over panel sign-in and access to the SSO client secret. `ANPI_OIDC_*` settings take priority and cannot be changed through the API.
+
 ## Environment variables
 
 | Variable | Default | |
@@ -70,7 +72,7 @@ Monitors of IPv4-only sites and Discord alerts go through that gateway, so they 
 **2. Install anpi** with the systemd unit from the release archive:
 
 ```sh
-V=v0.3.0
+V=v0.4.0
 case $(dpkg --print-architecture) in amd64) T=x86_64-unknown-linux-musl;; arm64) T=aarch64-unknown-linux-musl;; esac
 cd /tmp
 curl -fLO https://github.com/igorovh/anpi/releases/download/$V/anpi-$V-$T.tar.gz

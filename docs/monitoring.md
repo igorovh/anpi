@@ -70,3 +70,5 @@ Push monitors show their URL on the monitor page:
 ```sh
 curl -fsS "https://status.example.com/api/push/<token>?status=up&msg=OK&ping=1234"
 ```
+
+Each token accepts one push per second; faster pushes get `429`.

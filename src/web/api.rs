@@ -163,7 +163,8 @@ async fn get_sso(State(st): State<AppState>, ApiAuth(token): ApiAuth) -> ApiResu
         panel.base_url = st.ctx.config.base_url.clone().unwrap_or_default();
         panel.issuer = cfg.issuer.clone();
         panel.client_id = cfg.client_id.clone();
-        panel.client_secret = cfg.client_secret.clone().unwrap_or_default();
+        // The environment secret cannot be changed through the API, so it is never handed out either.
+        panel.client_secret = String::new();
         panel.required_role = cfg.required_role.clone().unwrap_or_default();
         panel.scopes = cfg.scopes.clone();
         "env"

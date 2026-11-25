@@ -43,6 +43,11 @@ pub async fn build(config: Config, db: db::Db) -> anyhow::Result<App> {
             "SSO has no required role: every account the identity provider signs in becomes an admin"
         );
     }
+    if ctx.config.client_ip_header.is_some() && ctx.config.trusts_any_peer() {
+        tracing::warn!(
+            "ANPI_CLIENT_IP_HEADER is believed from any peer; set ANPI_TRUSTED_PROXIES to your proxy's ranges unless a firewall already lets only the proxy reach anpi"
+        );
+    }
     let scheduler = Scheduler::new(ctx.clone());
     let state = web::AppState::new(ctx.clone(), scheduler.clone());
     if ctx.auth().oidc.is_none() && store::users::count(&ctx.db).await? == 0 {

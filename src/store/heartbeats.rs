@@ -41,10 +41,12 @@ pub async fn recent(db: &Db, monitor_id: i64, limit: i64) -> sqlx::Result<Vec<He
 /// Last `per_monitor` heartbeats for every monitor, oldest first.
 pub async fn recent_all(db: &Db, per_monitor: i64) -> sqlx::Result<HashMap<i64, Vec<Heartbeat>>> {
     let rows: Vec<Heartbeat> = sqlx::query_as(
-        "SELECT id, monitor_id, ts, status, status_code, dns_ms, connect_ms, tls_ms, ttfb_ms, total_ms, remote_ip,
-                message, cert_expires_at
-         FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY ts DESC) AS rn FROM heartbeats)
-         WHERE rn <= ? ORDER BY monitor_id, ts",
+        // A per-monitor LIMIT walks the (monitor_id, ts) index; the public status page runs this unauthenticated.
+        "SELECT h.id, h.monitor_id, h.ts, h.status, h.status_code, h.dns_ms, h.connect_ms, h.tls_ms, h.ttfb_ms,
+                h.total_ms, h.remote_ip, h.message, h.cert_expires_at
+         FROM monitors m JOIN heartbeats h ON h.id IN
+             (SELECT id FROM heartbeats WHERE monitor_id = m.id ORDER BY ts DESC LIMIT ?1)
+         ORDER BY h.monitor_id, h.ts",
     )
     .bind(per_monitor)
     .fetch_all(db)

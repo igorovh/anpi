@@ -188,6 +188,13 @@ async fn push_monitor_goes_down_when_pushes_stop() {
         ))
         .await;
     assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        c.get(&format!("/api/push/{token}?status=down"))
+            .await
+            .status,
+        429,
+        "a leaked push URL cannot flap the monitor faster than once a second"
+    );
     wait_for("push recorded", Duration::from_secs(3), || async {
         app.ctx.writer.flush().await;
         store::heartbeats::recent(&db, id, 1)

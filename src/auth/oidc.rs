@@ -1,28 +1,20 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::net::IpAddr;
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use http::Method;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use crate::checks::http::{RequestSpec, send};
 use crate::config::OidcConfig;
-use crate::util::{random_token, sha256_b64url};
+use crate::util::{constant_time_eq, hmac_sha256, random_token, sha256_b64url};
 
 const PENDING_TTL: Duration = Duration::from_secs(600);
-const MAX_PENDING: usize = 10_000;
-
-#[derive(Debug)]
-pub enum BeginError {
-    /// Too many sign-ins are in progress; refuse rather than grow without bound.
-    Busy,
-    Provider(String),
-}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Discovery {
@@ -33,11 +25,13 @@ pub struct Discovery {
     pub end_session_endpoint: Option<String>,
 }
 
+/// Sign-in state kept in a signed cookie, so unauthenticated visitors cannot fill server memory.
+#[derive(Serialize, Deserialize)]
 struct Pending {
     nonce: String,
     verifier: String,
     next: String,
-    created: Instant,
+    created: i64,
 }
 
 #[derive(Debug)]
@@ -53,7 +47,30 @@ pub struct Oidc {
     cfg: OidcConfig,
     redirect_url: String,
     discovery: OnceCell<Discovery>,
-    pending: Mutex<HashMap<String, Pending>>,
+    key: [u8; 32],
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// id_token signatures are not checked, so provider URLs must use TLS; plain HTTP only on loopback.
+pub fn check_provider_url(raw: &str) -> Result<(), String> {
+    let u = url::Url::parse(raw).map_err(|e| format!("invalid provider URL {raw:?}: {e}"))?;
+    let loopback = match u.host() {
+        Some(url::Host::Domain(d)) => d == "localhost",
+        Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip).is_loopback(),
+        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip).is_loopback(),
+        None => false,
+    };
+    match u.scheme() {
+        "https" => Ok(()),
+        "http" if loopback => Ok(()),
+        _ => Err(format!("provider URL {raw} must use https://")),
+    }
 }
 
 impl Oidc {
@@ -62,16 +79,21 @@ impl Oidc {
             cfg,
             redirect_url,
             discovery: OnceCell::new(),
-            pending: Mutex::new(HashMap::new()),
+            key: rand::random(),
         }
     }
 
+    fn spec(method: Method, url: &str) -> Result<RequestSpec, String> {
+        let mut spec = RequestSpec::new(method, url::Url::parse(url).map_err(|e| e.to_string())?);
+        // A redirect would re-send the code, PKCE verifier and client secret to another host.
+        spec.max_redirects = 0;
+        Ok(spec)
+    }
+
     async fn get_json(url: &str) -> Result<Value, String> {
-        let spec = RequestSpec::new(
-            Method::GET,
-            url::Url::parse(url).map_err(|e| e.to_string())?,
-        );
-        let r = send(&spec).await.map_err(|e| e.to_string())?;
+        let r = send(&Self::spec(Method::GET, url)?)
+            .await
+            .map_err(|e| e.to_string())?;
         if r.status != 200 {
             return Err(format!("HTTP {} from {url}", r.status));
         }
@@ -85,6 +107,7 @@ impl Oidc {
     pub async fn discovery(&self) -> Result<&Discovery, String> {
         self.discovery
             .get_or_try_init(|| async {
+                check_provider_url(&self.cfg.issuer)?;
                 let url = format!("{}/.well-known/openid-configuration", self.cfg.issuer);
                 let d: Discovery = serde_json::from_value(Self::get_json(&url).await?)
                     .map_err(|e| format!("discovery document: {e}"))?;
@@ -94,55 +117,64 @@ impl Oidc {
                         self.cfg.issuer, d.issuer
                     ));
                 }
+                check_provider_url(&d.authorization_endpoint)?;
+                check_provider_url(&d.token_endpoint)?;
                 Ok(d)
             })
             .await
     }
 
-    /// Returns the provider URL to redirect to and the state value to bind to the browser.
-    pub async fn begin(&self, next: &str) -> Result<(String, String), BeginError> {
-        {
-            let mut pending = self.pending.lock().expect("oidc lock");
-            pending.retain(|_, p| p.created.elapsed() < PENDING_TTL);
-            if pending.len() >= MAX_PENDING {
-                return Err(BeginError::Busy);
-            }
+    fn seal(&self, state: &str, pending: &Pending) -> String {
+        let body = URL_SAFE_NO_PAD.encode(serde_json::to_vec(pending).unwrap_or_default());
+        let signed = format!("{state}.{body}");
+        let mac = URL_SAFE_NO_PAD.encode(hmac_sha256(&self.key, signed.as_bytes()));
+        format!("{signed}.{mac}")
+    }
+
+    fn open(&self, cookie: &str, state: &str) -> Option<Pending> {
+        let (signed, mac) = cookie.rsplit_once('.')?;
+        let expected = URL_SAFE_NO_PAD.encode(hmac_sha256(&self.key, signed.as_bytes()));
+        if !constant_time_eq(mac.as_bytes(), expected.as_bytes()) {
+            return None;
         }
-        let d = self.discovery().await.map_err(BeginError::Provider)?;
+        let (cookie_state, body) = signed.split_once('.')?;
+        if !constant_time_eq(cookie_state.as_bytes(), state.as_bytes()) {
+            return None;
+        }
+        let p: Pending = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(body).ok()?).ok()?;
+        let age = unix_now() - p.created;
+        (0..PENDING_TTL.as_secs() as i64)
+            .contains(&age)
+            .then_some(p)
+    }
+
+    /// Returns the provider URL to redirect to and the signed value to store in the browser.
+    pub async fn begin(&self, next: &str) -> Result<(String, String), String> {
+        let d = self.discovery().await?;
         let state = random_token(24);
-        let nonce = random_token(24);
-        let verifier = random_token(48);
-        let mut url = url::Url::parse(&d.authorization_endpoint)
-            .map_err(|e| BeginError::Provider(e.to_string()))?;
+        let pending = Pending {
+            nonce: random_token(24),
+            verifier: random_token(48),
+            next: next.to_string(),
+            created: unix_now(),
+        };
+        let mut url = url::Url::parse(&d.authorization_endpoint).map_err(|e| e.to_string())?;
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", &self.cfg.client_id)
             .append_pair("redirect_uri", &self.redirect_url)
             .append_pair("scope", &self.cfg.scopes)
             .append_pair("state", &state)
-            .append_pair("nonce", &nonce)
-            .append_pair("code_challenge", &sha256_b64url(&verifier))
+            .append_pair("nonce", &pending.nonce)
+            .append_pair("code_challenge", &sha256_b64url(&pending.verifier))
             .append_pair("code_challenge_method", "S256");
-        let mut pending = self.pending.lock().expect("oidc lock");
-        pending.insert(
-            state.clone(),
-            Pending {
-                nonce,
-                verifier,
-                next: next.to_string(),
-                created: Instant::now(),
-            },
-        );
-        Ok((url.to_string(), state))
+        Ok((url.to_string(), self.seal(&state, &pending)))
     }
 
-    pub async fn complete(&self, code: &str, state: &str) -> Result<Login, String> {
+    /// `cookie` is the value `begin` returned; it is only accepted together with its own `state`.
+    pub async fn complete(&self, code: &str, state: &str, cookie: &str) -> Result<Login, String> {
         let pending = self
-            .pending
-            .lock()
-            .expect("oidc lock")
-            .remove(state)
-            .filter(|p| p.created.elapsed() < PENDING_TTL)
+            .open(cookie, state)
             .ok_or("login session expired, please try again")?;
         let d = self.discovery().await?;
 
@@ -153,12 +185,9 @@ impl Oidc {
             .append_pair("client_id", &self.cfg.client_id)
             .append_pair("code_verifier", &pending.verifier)
             .finish();
-        let mut spec = RequestSpec::new(
-            Method::POST,
-            url::Url::parse(&d.token_endpoint).map_err(|e| e.to_string())?,
-        )
-        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(form);
+        let mut spec = Self::spec(Method::POST, &d.token_endpoint)?
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(form);
         if let Some(secret) = &self.cfg.client_secret {
             let creds = format!(
                 "{}:{}",
@@ -186,11 +215,13 @@ impl Oidc {
             .ok_or("no id_token in token response")?;
         // Tokens come straight from the token endpoint over TLS, which OIDC Core 3.1.3.7 accepts in place of signature checks.
         let claims = decode_jwt_payload(id_token)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        validate_id_token(&claims, &d.issuer, &self.cfg.client_id, &pending.nonce, now)?;
+        validate_id_token(
+            &claims,
+            &d.issuer,
+            &self.cfg.client_id,
+            &pending.nonce,
+            unix_now(),
+        )?;
 
         if let Some(role) = &self.cfg.required_role {
             let access = tokens
@@ -387,7 +418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_sign_ins_are_capped() {
+    async fn sign_in_state_is_signed_and_bound_to_the_state() {
         let cfg = OidcConfig {
             issuer: "https://kc".into(),
             client_id: "anpi".into(),
@@ -403,14 +434,29 @@ mod tests {
             end_session_endpoint: None,
         };
         oidc.discovery.set(d).unwrap();
-        for _ in 0..MAX_PENDING {
-            assert!(oidc.begin("/admin").await.is_ok());
-        }
+        let (_, cookie) = oidc.begin("/admin").await.unwrap();
+        let state = cookie.split('.').next().unwrap();
+        assert_eq!(oidc.open(&cookie, state).unwrap().next, "/admin");
+        assert!(oidc.open(&cookie, "other-state").is_none());
+        let forged = cookie.replacen('.', ".x", 1);
         assert!(
-            matches!(oidc.begin("/admin").await, Err(BeginError::Busy)),
-            "unauthenticated requests cannot grow the map further"
+            oidc.open(&forged, state).is_none(),
+            "tampering breaks the MAC"
         );
-        assert_eq!(oidc.pending.lock().unwrap().len(), MAX_PENDING);
+        let other = Oidc::new(oidc.cfg.clone(), oidc.redirect_url.clone());
+        assert!(
+            other.open(&cookie, state).is_none(),
+            "keys are per instance"
+        );
+    }
+
+    #[test]
+    fn provider_urls_must_use_tls_outside_loopback() {
+        assert!(check_provider_url("https://kc/realms/r").is_ok());
+        assert!(check_provider_url("http://127.0.0.1:8080/realms/r").is_ok());
+        assert!(check_provider_url("http://localhost/realms/r").is_ok());
+        assert!(check_provider_url("http://kc.example.com/realms/r").is_err());
+        assert!(check_provider_url("ftp://kc/realms/r").is_err());
     }
 
     #[test]

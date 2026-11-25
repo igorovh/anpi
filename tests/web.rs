@@ -608,11 +608,16 @@ async fn appearance_sets_theme_css_favicon_and_footer() {
     );
     let settings = c.get("/admin/settings").await.body;
     assert!(settings.contains("--bg: #000;"));
-    assert!(
-        !settings.contains("/brand/custom.css"),
-        "the settings page stays usable whatever the CSS does"
-    );
-    assert!(c.get("/admin").await.body.contains("/brand/custom.css"));
+    for page in [
+        settings,
+        c.get("/admin").await.body,
+        anon.get("/login").await.body,
+    ] {
+        assert!(
+            !page.contains("/brand/custom.css"),
+            "custom CSS never restyles the panel or the sign-in page"
+        );
+    }
 
     assert_eq!(
         c.post(
@@ -1032,6 +1037,7 @@ async fn spoofed_forwarded_for_does_not_reset_the_login_limit() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 // The client controls everything before the address its proxy appends last.
                 .header("x-forwarded-for", format!("{spoof}, 198.51.100.7"))
+                .extension(proxy_peer())
                 .body(axum::body::Body::from(body))
                 .unwrap();
             tower::ServiceExt::oneshot(router, req)
@@ -1609,10 +1615,14 @@ async fn sub_monitor_incidents_name_their_parent() {
 
 #[tokio::test]
 async fn client_ip_header_decides_who_is_rate_limited() {
-    let app = app(config(&[("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP")])).await;
+    let app = app(config(&[
+        ("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP"),
+        ("ANPI_TRUSTED_PROXIES", "127.0.0.0/8"),
+    ]))
+    .await;
     signed_in(&app).await;
     let router = anpi::web::router(app.state.clone());
-    let attempt = |ip: &'static str, password: &'static str| {
+    let attempt = |ip: &'static str, password: &'static str, peer| {
         let router = router.clone();
         async move {
             let body = url::form_urlencoded::Serializer::new(String::new())
@@ -1623,6 +1633,7 @@ async fn client_ip_header_decides_who_is_rate_limited() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("cf-connecting-ip", ip)
                 .header("x-forwarded-for", "192.0.2.99")
+                .extension(peer)
                 .body(axum::body::Body::from(body))
                 .unwrap();
             tower::ServiceExt::oneshot(router, req)
@@ -1632,16 +1643,50 @@ async fn client_ip_header_decides_who_is_rate_limited() {
         }
     };
     for _ in 0..10 {
-        attempt("2001:db8::1", "wrong-password").await;
+        attempt("2001:db8:0:1::1", "wrong-password", proxy_peer()).await;
     }
     assert_eq!(
-        attempt("2001:db8::1", "a-long-password").await,
+        attempt("2001:db8:0:1::1", "a-long-password", proxy_peer()).await,
         StatusCode::TOO_MANY_REQUESTS,
         "the visitor in the header is locked out"
     );
     assert_eq!(
-        attempt("2001:db8::2", "a-long-password").await,
+        attempt("2001:db8:0:1::7", "a-long-password", proxy_peer()).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the rest of the visitor's /64 is locked out too"
+    );
+    assert_eq!(
+        attempt("2001:db8:0:2::1", "a-long-password", proxy_peer()).await,
         StatusCode::SEE_OTHER,
         "other visitors behind the same proxy are not"
     );
+    let direct = axum::extract::ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000)));
+    for _ in 0..10 {
+        attempt("2001:db8:0:9::1", "wrong-password", direct).await;
+    }
+    assert_eq!(
+        attempt("2001:db8:0:a::1", "a-long-password", direct).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a client that reaches anpi directly cannot pick its address with the header"
+    );
+}
+
+fn proxy_peer() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+    axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 4000)))
+}
+
+#[tokio::test]
+async fn panel_pages_are_never_cached() {
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    for path in ["/admin", "/admin/settings"] {
+        let r = c.get(path).await;
+        assert_eq!(
+            r.headers.get("cache-control").unwrap(),
+            "no-store",
+            "{path}"
+        );
+    }
+    let mut anon = Client::new(anpi::web::router(app.state.clone()));
+    assert!(anon.get("/").await.headers.get("cache-control").is_none());
 }

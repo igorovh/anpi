@@ -9,9 +9,10 @@ mod public;
 mod settings;
 mod views;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use askama::Template;
 use axum::Router;
@@ -34,6 +35,7 @@ use crate::monitor::scheduler::Scheduler;
 use crate::store;
 
 pub const SESSION_COOKIE: &str = "anpi_session";
+const MAX_PUBLIC_STREAMS: usize = 2_000;
 /// Changes whenever a bundled asset changes, so browsers never keep stale CSS or JS.
 pub fn asset_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -55,6 +57,9 @@ pub struct AppState {
     pub limiter: Arc<LoginLimiter>,
     /// One-time code printed to the log; required to create the first account.
     pub setup_code: Arc<Mutex<Option<String>>>,
+    /// Last accepted push per token; only valid tokens are recorded, so it stays as small as the monitor list.
+    pub push_seen: Arc<Mutex<HashMap<String, Instant>>>,
+    pub public_streams: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -64,6 +69,8 @@ impl AppState {
             scheduler,
             limiter: Arc::new(LoginLimiter::new(10, Duration::from_secs(15 * 60))),
             setup_code: Arc::new(Mutex::new(None)),
+            push_seen: Arc::default(),
+            public_streams: Arc::new(tokio::sync::Semaphore::new(MAX_PUBLIC_STREAMS)),
         }
     }
 
@@ -149,11 +156,7 @@ pub struct CurrentUser {
 
 impl CurrentUser {
     pub fn check_csrf(&self, token: &str) -> AppResult<()> {
-        let a = self.csrf.as_bytes();
-        let b = token.as_bytes();
-        let same =
-            a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
-        if same {
+        if crate::util::constant_time_eq(self.csrf.as_bytes(), token.as_bytes()) {
             Ok(())
         } else {
             Err(AppError::forbidden(
@@ -206,6 +209,10 @@ impl FromRequestParts<AppState> for ClientIp {
             .get::<ConnectInfo<SocketAddr>>()
             .map(|c| c.0.ip())
             .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        // Forwarding headers are only believed from a proxy; anyone else could set them.
+        if !state.ctx.config.is_trusted_proxy(peer) {
+            return Ok(Self(peer));
+        }
         if let Some(name) = &state.ctx.config.client_ip_header {
             let ip = parts
                 .headers
@@ -313,6 +320,17 @@ async fn origin_guard(req: Request, next: Next) -> Response {
         }
     }
     next.run(req).await
+}
+
+/// Panel pages hold monitor targets and the CSRF token; keep them out of shared and back/forward caches.
+async fn no_store_admin(req: Request, next: Next) -> Response {
+    let admin = req.uri().path().starts_with("/admin");
+    let mut resp = next.run(req).await;
+    if admin && !resp.headers().contains_key(header::CACHE_CONTROL) {
+        resp.headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    resp
 }
 
 async fn healthz(State(st): State<AppState>) -> Response {
@@ -433,6 +451,7 @@ pub fn router(state: AppState) -> Router {
         )
         .fallback(|| async { AppError::not_found() })
         .layer(middleware::from_fn(origin_guard))
+        .layer(middleware::from_fn(no_store_admin))
         .layer(CompressionLayer::new())
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CONTENT_SECURITY_POLICY,

@@ -204,12 +204,25 @@ async fn run_monitor(
     }
 }
 
+const MAX_MESSAGE_BYTES: usize = 1024;
+
+fn truncate_message(message: &mut String, max: usize) {
+    if message.len() > max {
+        let mut end = max;
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+    }
+}
+
 pub(crate) async fn process(
     ctx: &Arc<Ctx>,
     m: &mut Monitor,
     state: &mut MonitorState,
-    outcome: CheckOutcome,
+    mut outcome: CheckOutcome,
 ) -> Status {
+    truncate_message(&mut outcome.message, MAX_MESSAGE_BYTES);
     let now = now_ms();
     ctx.last_check
         .store(now, std::sync::atomic::Ordering::Relaxed);

@@ -279,7 +279,7 @@ pub async fn status_page(State(st): State<AppState>, jar: CookieJar) -> AppResul
         .into_iter()
         .map(|(name, monitors)| PublicGroup { name, monitors })
         .collect();
-    let mut layout = Layout::bare(&st.ctx.branding(), &settings.status_title);
+    let mut layout = Layout::public(&st.ctx.branding(), &settings.status_title);
     layout.signed_in = match jar.get(SESSION_COOKIE) {
         Some(c) => store::users::session(st.db(), c.value()).await?.is_some(),
         None => false,
@@ -371,6 +371,20 @@ pub async fn push(
     Path(token): Path<String>,
     Query(q): Query<PushQuery>,
 ) -> Response {
+    const MIN_PUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+    let recent = st
+        .push_seen
+        .lock()
+        .expect("push lock")
+        .get(&token)
+        .is_some_and(|t| t.elapsed() < MIN_PUSH_INTERVAL);
+    if recent {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "ok": false, "msg": "pushes are limited to one per second" })),
+        )
+            .into_response();
+    }
     let ok = !q
         .status
         .as_deref()
@@ -384,6 +398,10 @@ pub async fn push(
             .filter(|p: &f64| p.is_finite() && *p >= 0.0),
     };
     if st.scheduler.push(&token, signal).await {
+        st.push_seen
+            .lock()
+            .expect("push lock")
+            .insert(token, std::time::Instant::now());
         Json(serde_json::json!({ "ok": true })).into_response()
     } else {
         (
@@ -397,10 +415,11 @@ pub async fn push(
 pub fn event_stream(
     st: &AppState,
     public_only: bool,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>> + use<>> {
     let rx = st.ctx.events.subscribe();
     let shutdown = st.ctx.shutdown.clone().cancelled_owned();
-    let stream = futures_util::stream::unfold(rx, move |mut rx| async move {
+    let stream = futures_util::stream::unfold((rx, permit), move |(mut rx, permit)| async move {
         loop {
             match rx.recv().await {
                 Ok(ev) => {
@@ -414,7 +433,7 @@ pub fn event_stream(
                         (*ev).clone()
                     };
                     if let Ok(event) = Event::default().json_data(&data) {
-                        return Some((Ok(event), rx));
+                        return Some((Ok(event), (rx, permit)));
                     }
                 }
                 Err(RecvError::Lagged(_)) => continue,
@@ -426,8 +445,12 @@ pub fn event_stream(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(20)))
 }
 
-pub async fn public_events(State(st): State<AppState>) -> impl IntoResponse {
-    event_stream(&st, true)
+/// Each open stream holds a permit, so unauthenticated clients cannot pile up connections without bound.
+pub async fn public_events(State(st): State<AppState>) -> Response {
+    match st.public_streams.clone().try_acquire_owned() {
+        Ok(permit) => event_stream(&st, true, Some(permit)).into_response(),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "too many live connections").into_response(),
+    }
 }
 
 #[cfg(test)]

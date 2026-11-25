@@ -405,7 +405,7 @@ pub async fn test_monitor(
 }
 
 pub async fn events(State(st): State<AppState>, _user: CurrentUser) -> impl IntoResponse {
-    public::event_stream(&st, false)
+    public::event_stream(&st, false, None)
 }
 
 #[derive(Deserialize, Clone, Debug)]

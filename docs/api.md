@@ -20,7 +20,7 @@ curl -H "Authorization: Bearer anpi_…" https://status.example.com/api/v1/monit
 
 SSO requires a separate permission. Select **Allow SSO changes** when creating a token, or run `anpi api-token terraform --allow-sso`. This permission grants control over panel sign-in and allows reading the SSO client secret. Keep the token private.
 
-`GET /api/v1/sso` returns `enabled`, `base_url`, `issuer`, `client_id`, `client_secret`, `required_role`, `scopes` and read-only `source` (`off`, `panel` or `env`). `PUT /api/v1/sso` replaces those settings, except `source`. Enabling SSO checks that the identity provider responds; invalid settings or a failed check return `400`. `DELETE /api/v1/sso` disables SSO. When SSO is configured by `ANPI_OIDC_*`, both `PUT` and `DELETE` return `400`. Tokens without SSO permission receive `403` for all three methods.
+`GET /api/v1/sso` returns `enabled`, `base_url`, `issuer`, `client_id`, `client_secret`, `required_role`, `scopes` and read-only `source` (`off`, `panel` or `env`). `PUT /api/v1/sso` replaces those settings, except `source`. Enabling SSO checks that the identity provider responds; invalid settings or a failed check return `400`. `DELETE /api/v1/sso` disables SSO. When SSO is configured by `ANPI_OIDC_*`, both `PUT` and `DELETE` return `400` and `client_secret` is returned empty. Also note that this permission lets a token point sign-in at its own identity provider, so treat it like an admin password. Tokens without SSO permission receive `403` for all three methods.
 
 ## Terraform
 
@@ -162,11 +162,11 @@ One object for the whole look of the panel and the status page:
 | `status_description` | `""` | up to 1000 characters |
 | `default_theme` | `system` | `system`, `light` or `dark`; a visitor's own choice still wins |
 | `show_powered_by` | `true` | the footer credit |
-| `custom_css` | `""` | up to 512 KB, loaded after the built-in stylesheet on every page |
+| `custom_css` | `""` | up to 512 KB, loaded after the built-in stylesheet on the public status page |
 | `logo`, `favicon` | `null` | base64 PNG, JPEG, WebP, GIF, ICO or SVG, up to 512 KB each; without a favicon the logo is used |
 
 `PUT` replaces everything: a field left out or `null` goes back to its default, so `null` removes an image. Text fields are trimmed and CRLF line breaks become LF. Images come back byte for byte as sent; unchanged images and CSS keep their URLs, so browser caches stay valid. `DELETE` resets all of it. Any token can use this endpoint.
 
-**Settings** never loads the custom CSS, so a stylesheet that breaks the layout can always be fixed or removed there.
+The panel and the sign-in page never load the custom CSS, so a token cannot restyle the admin UI and a broken stylesheet can always be fixed there.
 
 Custom CSS can override the colour variables in `static/app.css` (`--bg`, `--panel`, `--ink`, `--muted`, `--line`, `--up`, `--down`, …) under `:root[data-theme="dark"]` and `:root[data-theme="light"]`, or restyle any element. The page's Content Security Policy only allows images and fonts from this site or `data:` URLs, so embed fonts as `data:` URLs.

@@ -189,6 +189,7 @@ async fn sso_environment_takes_priority_and_cannot_be_changed() {
     let app = app(config(&[
         ("ANPI_OIDC_ISSUER", "https://issuer.example"),
         ("ANPI_OIDC_CLIENT_ID", "client"),
+        ("ANPI_OIDC_CLIENT_SECRET", "env-secret"),
         ("ANPI_BASE_URL", "https://status.example"),
     ]))
     .await;
@@ -198,6 +199,10 @@ async fn sso_environment_takes_priority_and_cannot_be_changed() {
     let mut c = Client::new(anpi::web::router(app.state.clone()));
     let (_, state) = c.api("GET", "/api/v1/sso", &token, None).await;
     assert_eq!(state["source"], "env");
+    assert_eq!(
+        state["client_secret"], "",
+        "the environment secret is not readable"
+    );
     assert_eq!(state["issuer"], "https://issuer.example");
     assert_eq!(
         c.api(

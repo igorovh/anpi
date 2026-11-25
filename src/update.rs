@@ -64,12 +64,26 @@ impl Release {
     }
 }
 
+/// Release metadata and assets must come from GitHub over https.
+fn trusted_url(url: &str) -> anyhow::Result<url::Url> {
+    let parsed = url::Url::parse(url)?;
+    let host = parsed.host_str().unwrap_or_default();
+    ensure!(
+        parsed.scheme() == "https"
+            && (matches!(host, "github.com" | "api.github.com")
+                || host.ends_with(".githubusercontent.com")),
+        "refusing to download {url}: not an https GitHub URL"
+    );
+    Ok(parsed)
+}
+
 pub async fn download(url: &str, accept: &str, max_bytes: usize) -> anyhow::Result<bytes::Bytes> {
-    let mut spec = RequestSpec::new(Method::GET, url::Url::parse(url)?)
+    let mut spec = RequestSpec::new(Method::GET, trusted_url(url)?)
         .header(USER_AGENT, &format!("anpi/{CURRENT}"))
         .header(ACCEPT, accept);
     spec.timeout = Duration::from_secs(300);
     spec.max_body_bytes = max_bytes;
+    spec.https_only = true;
     let r = send(&spec).await.with_context(|| format!("GET {url}"))?;
     match r.status {
         200 => {}
@@ -253,6 +267,26 @@ mod tests {
             "no checksum, no update"
         );
         assert!(r.archive_for("riscv64").is_none());
+    }
+
+    #[test]
+    fn downloads_only_from_github_over_https() {
+        for ok in [
+            "https://github.com/igorovh/anpi/releases/download/v1.0.0/a.tar.gz",
+            "https://api.github.com/repos/igorovh/anpi/releases/latest",
+            "https://objects.githubusercontent.com/x",
+            "https://release-assets.githubusercontent.com/x",
+        ] {
+            assert!(trusted_url(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://github.com/a",
+            "https://evil.com/a",
+            "https://github.com.evil.com/a",
+            "https://evilgithubusercontent.com/a",
+        ] {
+            assert!(trusted_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

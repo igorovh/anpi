@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::header::{
-    ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, HOST, LOCATION, USER_AGENT,
+    ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH, COOKIE, HOST, LOCATION,
+    PROXY_AUTHORIZATION, USER_AGENT,
 };
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request};
 use http_body_util::{BodyExt, Full};
@@ -136,6 +137,7 @@ pub struct RequestSpec {
     pub max_redirects: usize,
     pub ignore_tls: bool,
     pub max_body_bytes: usize,
+    pub https_only: bool,
 }
 
 impl RequestSpec {
@@ -150,6 +152,7 @@ impl RequestSpec {
             max_redirects: 10,
             ignore_tls: false,
             max_body_bytes: 2 * 1024 * 1024,
+            https_only: false,
         }
     }
 
@@ -287,8 +290,11 @@ async fn run(
     let mut method = spec.method.clone();
     let mut body = spec.body.clone();
     let mut hops = 0;
+    // Once a redirect leaves the original origin, credentials stay off for every later hop.
+    let mut strip_credentials = false;
     loop {
-        let mut resp = one_request(&url, &method, &body, spec, deadline, p).await?;
+        let mut resp =
+            one_request(&url, &method, &body, spec, strip_credentials, deadline, p).await?;
         let location = resp
             .headers
             .get(LOCATION)
@@ -304,6 +310,12 @@ async fn run(
                 url = url
                     .join(&loc)
                     .map_err(|e| p.fail(format!("invalid redirect location {loc:?}: {e}")))?;
+                if spec.https_only && url.scheme() != "https" {
+                    return Err(p.fail(format!("refusing to follow redirect to {url}: not https")));
+                }
+                if url.origin() != spec.url.origin() {
+                    strip_credentials = true;
+                }
                 if resp.status == 303
                     || (matches!(resp.status, 301 | 302) && method != Method::HEAD)
                 {
@@ -429,6 +441,7 @@ async fn one_request(
     method: &Method,
     body: &Bytes,
     spec: &RequestSpec,
+    strip_credentials: bool,
     deadline: Instant,
     p: &mut Progress,
 ) -> Result<Response, HttpError> {
@@ -479,6 +492,9 @@ async fn one_request(
         headers.insert(CONTENT_LENGTH, HeaderValue::from(body.len()));
     }
     for (k, v) in &spec.headers {
+        if strip_credentials && [AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION].contains(k) {
+            continue;
+        }
         headers.insert(k.clone(), v.clone());
     }
     let path = match url.query() {

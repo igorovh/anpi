@@ -11,8 +11,9 @@ SSO can also be managed through the REST API and Terraform. Create a token with 
 | `ANPI_BIND` | `0.0.0.0:3000` | Listen address |
 | `ANPI_DATA_DIR` | `./data` | Directory for `anpi.db` (`ANPI_DATABASE` sets the file path directly) |
 | `ANPI_BASE_URL` | – | Public URL, e.g. `https://status.example.com`. Used for links and SSO; `https` turns on secure cookies |
-| `ANPI_TRUST_PROXY` | `false` | Behind a reverse proxy, take the client address for login rate limiting from the **last** `X-Forwarded-For` entry. Enable it only when a proxy always appends that entry (nginx `$proxy_add_x_forwarded_for`, Caddy and Traefik do); without a proxy, clients could set it themselves |
-| `ANPI_CLIENT_IP_HEADER` | – | Take the client address from this header instead, e.g. `CF-Connecting-IP` behind Cloudflare. Only safe when the firewall lets nothing but the proxy reach anpi |
+| `ANPI_TRUST_PROXY` | `false` | Behind a reverse proxy, take the client address for login rate limiting from the **last** `X-Forwarded-For` entry. Enable it only when a proxy always appends that entry (nginx `$proxy_add_x_forwarded_for`, Caddy and Traefik do). The header is only read from peers in `ANPI_TRUSTED_PROXIES` |
+| `ANPI_CLIENT_IP_HEADER` | – | Take the client address from this header instead, e.g. `CF-Connecting-IP` behind Cloudflare. Set `ANPI_TRUSTED_PROXIES` too, or make sure the firewall lets nothing but the proxy reach anpi |
+| `ANPI_TRUSTED_PROXIES` | private networks | Comma-separated addresses or CIDR ranges whose forwarding headers are believed; `*` means any peer. Defaults to loopback and private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`, link-local); with `ANPI_CLIENT_IP_HEADER` and no list, any peer is believed and anpi logs a warning |
 | `ANPI_TLS_CERT`, `ANPI_TLS_KEY` | – | PEM certificate and key; anpi then serves HTTPS itself, without a reverse proxy |
 | `ANPI_HEARTBEAT_URL` | – | URL requested every minute while anpi is healthy, e.g. a healthchecks.io check; overrides the panel setting |
 | `ANPI_MAX_CONCURRENT_CHECKS` | `64` | Upper bound on checks running at once |
@@ -34,7 +35,7 @@ For Keycloak:
 2. Set **Valid redirect URIs** to `https://status.example.com/auth/oidc/callback` and **Valid post logout redirect URIs** to `https://status.example.com/`.
 3. Optional: require a realm role, client role or group, for example `monitoring`.
 
-PKCE is always used. The ID token's issuer, audience, expiry and nonce are checked, and the login state is bound to the browser that started it.
+PKCE is always used. The ID token's issuer, audience, expiry and nonce are checked, and the login state is bound to the browser that started it. The issuer and its endpoints must use `https://` (plain `http://` works only on `localhost`), and provider redirects are not followed. SSO sessions last 12 hours, so role changes at the provider apply by the next sign-in; password sessions last 7 days.
 
 ## Backup and moving servers
 
@@ -99,6 +100,7 @@ ANPI_BASE_URL=https://status.example.com
 ANPI_TLS_CERT=/etc/anpi/origin.pem
 ANPI_TLS_KEY=/etc/anpi/origin.key
 ANPI_CLIENT_IP_HEADER=CF-Connecting-IP
+ANPI_TRUSTED_PROXIES=2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32
 ```
 
 The unit allows binding port 443. Start anpi with `sudo systemctl enable --now anpi`, read the setup code with `sudo journalctl -u anpi | grep "setup code"` and open `https://status.example.com/setup`.
@@ -123,7 +125,7 @@ Save it as `/etc/nftables.conf` and run `sudo systemctl enable --now nftables`.
 ## Deployment notes
 
 - **systemd:** copy the binary to `/usr/local/bin/anpi`; `deploy/anpi.service` runs anpi as an unprivileged user with a hardened sandbox; `deploy/anpi.env.example` lists the settings.
-- **Reverse proxy:** put Caddy or nginx in front for HTTPS and set `ANPI_TRUST_PROXY=true`.
+- **Reverse proxy:** put Caddy or nginx in front for HTTPS and set `ANPI_TRUST_PROXY=true`. If the proxy does not reach anpi from a private address, list it in `ANPI_TRUSTED_PROXIES`.
 - **IPv6 in Docker:** IPv6 monitors need IPv6 inside the container. Enable it in the Docker daemon or use `network_mode: host`.
 - **Ping:** ICMP needs `CAP_NET_RAW` (granted in the systemd unit) or unprivileged ICMP sockets through `net.ipv4.ping_group_range`, which Docker allows by default.
 

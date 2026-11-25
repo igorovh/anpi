@@ -35,6 +35,28 @@ pub fn sha256_b64url(input: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
 }
 
+pub fn hmac_sha256(key: &[u8; 32], msg: &[u8]) -> [u8; 32] {
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for (i, k) in key.iter().enumerate() {
+        ipad[i] ^= k;
+        opad[i] ^= k;
+    }
+    let inner = Sha256::new()
+        .chain_update(ipad)
+        .chain_update(msg)
+        .finalize();
+    Sha256::new()
+        .chain_update(opad)
+        .chain_update(inner)
+        .finalize()
+        .into()
+}
+
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 pub fn format_ts(ms: i64) -> String {
     let Ok(dt) = time::OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000) else {
         return String::new();

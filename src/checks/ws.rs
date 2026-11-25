@@ -7,11 +7,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use url::{Host, Url};
 
 use super::content;
 use super::http::{TlsConfigs, cert_not_after, connect_any, resolve, tls_error_text};
 use crate::models::{CheckOutcome, ContentKind, IpFamily};
+
+/// Same cap as the HTTP check's response body.
+const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 
 pub struct WsSpec<'a> {
     pub url: &'a str,
@@ -141,9 +145,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let t = Instant::now();
-    let (mut ws, response) = tokio_tungstenite::client_async(request, stream)
-        .await
-        .map_err(|e| format!("handshake: {e}"))?;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES));
+    let (mut ws, response) =
+        tokio_tungstenite::client_async_with_config(request, stream, Some(config))
+            .await
+            .map_err(|e| format!("handshake: {e}"))?;
     out.timings.ttfb_ms = Some(ms(t));
     out.status_code = Some(response.status().as_u16());
 

@@ -48,11 +48,18 @@ pub fn evaluate(kind: ContentKind, value: &str, expected: &str, body: &str) -> R
             if expected.is_empty() || nodes.iter().any(|n| json_equals(n, expected)) {
                 return Ok(());
             }
-            let got = nodes
+            let mut got = nodes
                 .iter()
+                .take(3)
                 .map(|n| n.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
+            if nodes.len() > 3 {
+                got.push_str(&format!(" (+{} more)", nodes.len() - 3));
+            }
+            if got.chars().count() > 200 {
+                got = got.chars().take(200).collect::<String>() + "…";
+            }
             Err(format!("JSONPath {value} = {got}, expected {expected}"))
         }
     }
@@ -134,6 +141,24 @@ mod tests {
                 .contains("not valid JSON")
         );
         assert!(evaluate(JsonPath, "$.db.healthy", "false", BODY).is_err());
+    }
+
+    #[test]
+    fn json_path_mismatch_message_is_capped() {
+        let items: Vec<String> = (0..1000)
+            .map(|i| format!("\"{}\"", "x".repeat(i % 50)))
+            .collect();
+        let body = format!("[{}]", items.join(","));
+        let e = evaluate(JsonPath, "$[*]", "nope", &body).unwrap_err();
+        assert!(e.chars().count() < 300, "{e}");
+        let e = evaluate(
+            JsonPath,
+            "$[*].id",
+            "9",
+            r#"[{"id":1},{"id":2},{"id":3},{"id":4}]"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("1, 2, 3 (+1 more)"), "{e}");
     }
 
     #[test]

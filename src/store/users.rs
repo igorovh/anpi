@@ -3,6 +3,8 @@ use crate::models::User;
 use crate::util::{now_ms, random_token, sha256_hex};
 
 pub const SESSION_TTL_MS: i64 = 7 * 24 * 3_600_000;
+/// Roles are only checked at sign-in, so SSO sessions expire sooner to pick up changes at the provider.
+pub const OIDC_SESSION_TTL_MS: i64 = 12 * 3_600_000;
 
 pub async fn count(db: &Db) -> sqlx::Result<i64> {
     sqlx::query_scalar("SELECT COUNT(*) FROM users")
@@ -81,6 +83,10 @@ pub async fn upsert_oidc(
             subject.chars().take(8).collect::<String>()
         );
     }
+    // Provider users may pick their own names, so a clash must never block someone's first sign-in.
+    while by_username(db, &username).await?.is_some() {
+        username = format!("{preferred_name}-{}", random_token(6));
+    }
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO users (username, oidc_issuer, oidc_subject, created_at) VALUES (?, ?, ?, ?) RETURNING id",
     )
@@ -112,7 +118,7 @@ pub async fn create_session(db: &Db, user_id: i64, id_token: Option<&str>) -> sq
     .bind(random_token(24))
     .bind(id_token)
     .bind(now)
-    .bind(now + SESSION_TTL_MS)
+    .bind(now + if id_token.is_some() { OIDC_SESSION_TTL_MS } else { SESSION_TTL_MS })
     .execute(db)
     .await?;
     Ok(token)

@@ -344,3 +344,76 @@ async fn secure_websocket_verifies_tls() {
         "certificate is read even when the upgrade fails"
     );
 }
+
+#[tokio::test]
+async fn credentials_are_dropped_on_cross_origin_redirects() {
+    use anpi::checks::http::{RequestSpec, send};
+    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+
+    let echo = || {
+        get(|h: HeaderMap| async move {
+            let v = |n| {
+                h.get(n)
+                    .map(|v: &axum::http::HeaderValue| v.to_str().unwrap().to_owned())
+            };
+            format!(
+                "auth={:?} cookie={:?} custom={:?}",
+                v(header::AUTHORIZATION),
+                v(header::COOKIE),
+                v(header::HeaderName::from_static("x-custom"))
+            )
+        })
+    };
+    let other = common::serve(axum::Router::new().route("/echo", echo())).await;
+    let cross = format!("http://127.0.0.1:{}/echo", other.port());
+    let origin = common::serve(
+        axum::Router::new()
+            .route("/echo", echo())
+            .route(
+                "/same",
+                get(|| async {
+                    (StatusCode::FOUND, [(header::LOCATION, "/echo")]).into_response()
+                }),
+            )
+            .route(
+                "/cross",
+                get(move || async move {
+                    (StatusCode::FOUND, [(header::LOCATION, cross)]).into_response()
+                }),
+            ),
+    )
+    .await;
+
+    let fetch = |path: &str| {
+        let url = url::Url::parse(&format!("http://{origin}{path}")).unwrap();
+        let spec = RequestSpec::new(http::Method::GET, url)
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .header(header::COOKIE, "session=secret")
+            .header(header::HeaderName::from_static("x-custom"), "kept");
+        async move { send(&spec).await.unwrap().text() }
+    };
+
+    let same = fetch("/same").await;
+    assert!(
+        same.contains("Bearer secret") && same.contains("session=secret"),
+        "{same}"
+    );
+    let cross = fetch("/cross").await;
+    assert_eq!(cross, r#"auth=None cookie=None custom=Some("kept")"#);
+}
+
+#[tokio::test]
+async fn https_only_requests_refuse_plain_http_redirects() {
+    use anpi::checks::http::{RequestSpec, send};
+
+    let t = Target::start().await;
+    let mut spec = RequestSpec::new(
+        http::Method::GET,
+        url::Url::parse(&t.url("/redirect")).unwrap(),
+    );
+    spec.https_only = true;
+    let err = send(&spec).await.unwrap_err();
+    assert!(err.message.contains("not https"), "{err}");
+}

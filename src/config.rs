@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use anyhow::{Context, bail};
@@ -21,6 +21,8 @@ pub struct Config {
     pub trust_proxy: bool,
     /// Header holding the visitor's address, set by a proxy such as Cloudflare (`CF-Connecting-IP`).
     pub client_ip_header: Option<http::HeaderName>,
+    /// Peers whose forwarding headers are believed; private networks by default, any peer with a client IP header.
+    pub trusted_proxies: Vec<Cidr>,
     /// Certificate and key files; anpi serves HTTPS itself when both are set.
     pub tls: Option<(PathBuf, PathBuf)>,
     /// URL pinged every minute while anpi is healthy; overrides the panel setting.
@@ -66,6 +68,21 @@ impl Config {
                 })
             })
             .transpose()?;
+        let trusted_proxies = match get("ANPI_TRUSTED_PROXIES") {
+            Some(v) => v
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    Cidr::parse(s).with_context(|| {
+                        format!("ANPI_TRUSTED_PROXIES entry {s:?} is not an address or CIDR range")
+                    })
+                })
+                .collect::<anyhow::Result<_>>()?,
+            // CF-Connecting-IP setups often face the internet directly and rely on a firewall instead.
+            None if client_ip_header.is_some() => vec![Cidr::any()],
+            None => Cidr::private_defaults(),
+        };
         let heartbeat_url = get("ANPI_HEARTBEAT_URL");
         if let Some(u) = &heartbeat_url {
             url::Url::parse(u).context("ANPI_HEARTBEAT_URL must be a full URL")?;
@@ -110,6 +127,7 @@ impl Config {
             base_url,
             trust_proxy,
             client_ip_header,
+            trusted_proxies,
             tls,
             heartbeat_url,
             max_concurrent_checks,
@@ -123,6 +141,14 @@ impl Config {
             .is_some_and(|u| u.starts_with("https://"))
     }
 
+    pub fn is_trusted_proxy(&self, peer: IpAddr) -> bool {
+        self.trusted_proxies.iter().any(|c| c.contains(peer))
+    }
+
+    pub fn trusts_any_peer(&self) -> bool {
+        self.trusted_proxies.iter().any(|c| c.prefix == 0)
+    }
+
     pub fn sso_only(&self) -> bool {
         self.oidc.is_some()
     }
@@ -131,6 +157,73 @@ impl Config {
         self.base_url
             .as_ref()
             .map(|b| format!("{b}/auth/oidc/callback"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cidr {
+    net: IpAddr,
+    prefix: u8,
+}
+
+impl Cidr {
+    /// Accepts `*` (any peer), a single address or `address/prefix`.
+    pub fn parse(s: &str) -> Option<Self> {
+        if s == "*" {
+            return Some(Self::any());
+        }
+        let (addr, prefix) = match s.split_once('/') {
+            Some((a, p)) => (a.parse::<IpAddr>().ok()?, Some(p.parse::<u8>().ok()?)),
+            None => (s.parse::<IpAddr>().ok()?, None),
+        };
+        let max = if addr.is_ipv4() { 32 } else { 128 };
+        let prefix = prefix.unwrap_or(max);
+        (prefix <= max).then_some(Self { net: addr, prefix })
+    }
+
+    fn any() -> Self {
+        Self {
+            net: IpAddr::from([0u8; 16]),
+            prefix: 0,
+        }
+    }
+
+    pub fn private_defaults() -> Vec<Self> {
+        [
+            "127.0.0.0/8",
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "100.64.0.0/10",
+            "169.254.0.0/16",
+            "::1/128",
+            "fc00::/7",
+            "fe80::/10",
+        ]
+        .iter()
+        .filter_map(|s| Self::parse(s))
+        .collect()
+    }
+
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        if self.prefix == 0 {
+            return true;
+        }
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+            v4 => v4,
+        };
+        match (self.net, ip) {
+            (IpAddr::V4(n), IpAddr::V4(a)) => {
+                let mask = u32::MAX << (32 - u32::from(self.prefix));
+                u32::from(n) & mask == u32::from(a) & mask
+            }
+            (IpAddr::V6(n), IpAddr::V6(a)) => {
+                let mask = u128::MAX << (128 - u32::from(self.prefix));
+                u128::from(n) & mask == u128::from(a) & mask
+            }
+            _ => false,
+        }
     }
 }
 
@@ -210,6 +303,45 @@ mod tests {
                 .contains("both")
         );
         assert!(Config::from_map(&env(&[("ANPI_CLIENT_IP_HEADER", "bad header")])).is_err());
+    }
+
+    #[test]
+    fn trusted_proxies_default_to_private_networks() {
+        let c = Config::from_map(&env(&[])).unwrap();
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.20.0.5",
+            "192.168.1.1",
+            "::1",
+            "fd00::5",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(c.is_trusted_proxy(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["203.0.113.5", "172.32.0.1", "2001:db8::1", "0.0.0.0"] {
+            assert!(!c.is_trusted_proxy(ip.parse().unwrap()), "{ip}");
+        }
+        let c = Config::from_map(&env(&[(
+            "ANPI_TRUSTED_PROXIES",
+            "173.245.48.0/20, 2400:cb00::/32",
+        )]))
+        .unwrap();
+        assert!(c.is_trusted_proxy("173.245.50.1".parse().unwrap()));
+        assert!(c.is_trusted_proxy("2400:cb00:1::1".parse().unwrap()));
+        assert!(
+            !c.is_trusted_proxy("127.0.0.1".parse().unwrap()),
+            "the list replaces the defaults"
+        );
+        let any = Config::from_map(&env(&[("ANPI_TRUSTED_PROXIES", "*")])).unwrap();
+        assert!(any.is_trusted_proxy("203.0.113.5".parse().unwrap()));
+        let cf = Config::from_map(&env(&[("ANPI_CLIENT_IP_HEADER", "CF-Connecting-IP")])).unwrap();
+        assert!(
+            cf.trusts_any_peer(),
+            "the header keeps working behind a firewall"
+        );
+        assert!(Config::from_map(&env(&[("ANPI_TRUSTED_PROXIES", "10.0.0.0/33")])).is_err());
+        assert!(Config::from_map(&env(&[("ANPI_TRUSTED_PROXIES", "nope")])).is_err());
     }
 
     #[test]

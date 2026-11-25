@@ -13,7 +13,6 @@ use super::views::Layout;
 use super::{
     AppError, AppResult, AppState, ClientIp, CurrentUser, SESSION_COOKIE, render, safe_next,
 };
-use crate::auth::oidc::BeginError;
 use crate::auth::password;
 use crate::store;
 
@@ -241,18 +240,12 @@ pub async fn oidc_login(
     let (url, state) = oidc
         .begin(&safe_next(q.next.as_deref()))
         .await
-        .map_err(|e| match e {
-            BeginError::Busy => AppError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Too many sign-ins in progress. Try again shortly.".into(),
-            ),
-            BeginError::Provider(e) => {
-                tracing::error!(error = %e, "OIDC discovery failed");
-                AppError(
-                    StatusCode::BAD_GATEWAY,
-                    "The identity provider is unreachable.".into(),
-                )
-            }
+        .map_err(|e| {
+            tracing::error!(error = %e, "OIDC discovery failed");
+            AppError(
+                StatusCode::BAD_GATEWAY,
+                "The identity provider is unreachable.".into(),
+            )
         })?;
     let cookie = Cookie::build((OIDC_STATE_COOKIE, state))
         .path("/auth/oidc")
@@ -280,21 +273,20 @@ pub async fn oidc_callback(
     let oidc = st.oidc().ok_or_else(AppError::not_found)?;
     let fail =
         |msg: String| login_page_response(&st, StatusCode::UNAUTHORIZED, "/admin", "", Some(msg));
+    // The query string is attacker-controlled, so its text is logged rather than shown.
     if let Some(err) = q.error {
-        return fail(format!(
-            "Identity provider returned an error: {}",
-            q.error_description.unwrap_or(err)
-        ));
+        tracing::warn!(error = %err, description = ?q.error_description, "OIDC provider returned an error");
+        return fail("The identity provider refused the sign-in.".into());
     }
     let (Some(code), Some(state)) = (q.code, q.state) else {
         return fail("Missing code or state in the callback.".into());
     };
-    // The state must match the cookie set on this browser, which blocks login CSRF.
-    if jar.get(OIDC_STATE_COOKIE).map(|c| c.value()) != Some(state.as_str()) {
+    // The signed cookie must carry this state, which binds the callback to the browser that started it.
+    let Some(cookie) = jar.get(OIDC_STATE_COOKIE).map(|c| c.value().to_string()) else {
         return fail("Sign-in session mismatch. Please start again.".into());
-    }
+    };
     let jar = jar.remove(Cookie::build(OIDC_STATE_COOKIE).path("/auth/oidc"));
-    let login = match oidc.complete(&code, &state).await {
+    let login = match oidc.complete(&code, &state, &cookie).await {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!(error = %e, "OIDC sign-in rejected");

@@ -30,9 +30,7 @@ impl Layout {
             favicon_url: brand
                 .favicon_version
                 .map(|v| format!("/brand/favicon?v={v}")),
-            custom_css_url: brand
-                .css_version
-                .map(|v| format!("/brand/custom.css?v={v}")),
+            custom_css_url: None,
             default_theme: brand.default_theme.clone(),
             show_powered_by: brand.show_powered_by,
             user: None,
@@ -42,6 +40,16 @@ impl Layout {
             show_incidents: true,
             notice: None,
             asset_version: asset_version(),
+        }
+    }
+
+    /// Custom CSS is applied to the public status page only: API tokens can write it, so it must never restyle the panel.
+    pub fn public(brand: &Branding, title: &str) -> Self {
+        Self {
+            custom_css_url: brand
+                .css_version
+                .map(|v| format!("/brand/custom.css?v={v}")),
+            ..Self::bare(brand, title)
         }
     }
 

@@ -11,11 +11,12 @@ use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_HANDSHAKES: usize = 512;
 
 pub fn load(cert: &Path, key: &Path) -> anyhow::Result<TlsAcceptor> {
     let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert)
@@ -49,8 +50,13 @@ impl TlsListener {
     pub fn new(tcp: TcpListener, acceptor: TlsAcceptor) -> io::Result<Self> {
         let local = tcp.local_addr()?;
         let (tx, rx) = mpsc::channel(64);
+        let handshakes = Arc::new(Semaphore::new(MAX_HANDSHAKES));
         tokio::spawn(async move {
             while !tx.is_closed() {
+                // Waiting here leaves excess connections in the kernel backlog.
+                let Ok(permit) = handshakes.clone().acquire_owned().await else {
+                    return;
+                };
                 let (socket, addr) = match tcp.accept().await {
                     Ok(c) => c,
                     Err(e) => {
@@ -61,7 +67,10 @@ impl TlsListener {
                 };
                 let (acceptor, tx) = (acceptor.clone(), tx.clone());
                 tokio::spawn(async move {
-                    match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(socket)).await {
+                    let handshake =
+                        tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(socket)).await;
+                    drop(permit);
+                    match handshake {
                         Ok(Ok(stream)) => {
                             let _ = tx.send((stream, addr)).await;
                         }

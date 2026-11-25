@@ -57,7 +57,7 @@
     </label>
     <label class="check"><input type="checkbox" name="show_powered_by"{% if layout.show_powered_by %} checked{% endif %}> Show “powered by anpi” in the footer</label>
   </div>
-  <label>Custom CSS<span class="hint">loaded after the built-in styles on every page, up to 512 KB; override variables such as <code>--bg</code>, <code>--ink</code> or <code>--up</code> under <code>:root[data-theme="dark"]</code> and <code>:root[data-theme="light"]</code>. Images and fonts must be <code>data:</code> URLs or files on this site. This page never loads it, so a broken stylesheet can always be fixed here.</span><textarea name="custom_css" rows="10" spellcheck="false">{{ custom_css }}</textarea></label>
+  <label>Custom CSS<span class="hint">loaded after the built-in styles on the public status page, up to 512 KB; override variables such as <code>--bg</code>, <code>--ink</code> or <code>--up</code> under <code>:root[data-theme="dark"]</code> and <code>:root[data-theme="light"]</code>. Images and fonts must be <code>data:</code> URLs or files on this site. The panel and sign-in page never load it.</span><textarea name="custom_css" rows="10" spellcheck="false">{{ custom_css }}</textarea></label>
   <div class="form-actions"><button type="submit" class="btn">Save appearance</button></div>
 </form>
 

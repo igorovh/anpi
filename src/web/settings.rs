@@ -311,11 +311,8 @@ async fn settings_page_with(
     let mut sso_panel = PanelSso::load(st.db()).await?;
     let sso_has_secret = !sso_panel.client_secret.is_empty();
     sso_panel.client_secret.clear();
-    let mut layout = Layout::admin("Settings", user, "settings").with_notice(notice);
-    // Broken custom CSS must never hide the form that fixes it.
-    layout.custom_css_url = None;
     let page = SettingsPage {
-        layout,
+        layout: Layout::admin("Settings", user, "settings").with_notice(notice),
         s,
         custom_css: store::assets::get(st.db(), crate::app::CSS_KEY)
             .await?

@@ -13,12 +13,19 @@ use crate::monitor::writer::Writer;
 use crate::store;
 
 pub const LOGO_KEY: &str = "logo";
+pub const FAVICON_KEY: &str = "favicon";
+pub const CSS_KEY: &str = "custom_css";
+pub const THEMES: [&str; 3] = ["system", "light", "dark"];
 
-/// Name and logo shown in the header, footer and page titles.
+/// Name, images, stylesheet and theme defaults applied to every page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Branding {
     pub site_name: String,
     pub logo_version: Option<i64>,
+    pub favicon_version: Option<i64>,
+    pub css_version: Option<i64>,
+    pub default_theme: String,
+    pub show_powered_by: bool,
 }
 
 impl Default for Branding {
@@ -26,18 +33,33 @@ impl Default for Branding {
         Self {
             site_name: "anpi".into(),
             logo_version: None,
+            favicon_version: None,
+            css_version: None,
+            default_theme: "system".into(),
+            show_powered_by: true,
         }
     }
 }
 
 impl Branding {
     pub async fn load(db: &Db) -> sqlx::Result<Self> {
+        let d = Self::default();
         let site_name = store::settings::get(db, "site_name")
             .await?
             .filter(|s| !s.trim().is_empty());
+        let default_theme = store::settings::get(db, "default_theme")
+            .await?
+            .filter(|t| THEMES.contains(&t.as_str()));
         Ok(Self {
-            site_name: site_name.unwrap_or_else(|| Self::default().site_name),
+            site_name: site_name.unwrap_or(d.site_name),
             logo_version: store::assets::version(db, LOGO_KEY).await?,
+            favicon_version: store::assets::version(db, FAVICON_KEY).await?,
+            css_version: store::assets::version(db, CSS_KEY).await?,
+            default_theme: default_theme.unwrap_or(d.default_theme),
+            show_powered_by: store::settings::get(db, "show_powered_by")
+                .await?
+                .as_deref()
+                != Some("0"),
         })
     }
 }

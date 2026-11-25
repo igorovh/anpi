@@ -558,6 +558,94 @@ async fn site_name_and_logo_can_be_changed_safely() {
 }
 
 #[tokio::test]
+async fn appearance_sets_theme_css_favicon_and_footer() {
+    let app = app(config(&[])).await;
+    let mut c = signed_in(&app).await;
+    let csrf = c.csrf().await;
+    let css = ":root[data-theme=\"dark\"] {\r\n  --bg: #000;\r\n}\r\n";
+
+    let r = c
+        .post(
+            "/admin/branding/appearance",
+            &[
+                ("csrf", &csrf),
+                ("default_theme", "light"),
+                ("custom_css", css),
+            ],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+    let ico = b"\x89PNG\r\n\x1a\nicon";
+    let r = c
+        .post_multipart(
+            "/admin/branding/favicon",
+            &[("csrf", &csrf)],
+            ("favicon", "f.png", ico),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER, "{}", r.body);
+
+    let mut anon = Client::new(anpi::web::router(app.state.clone()));
+    let page = anon.get("/").await.body;
+    assert!(page.contains("data-default-theme=\"light\""));
+    assert!(page.contains("rel=\"icon\" href=\"/brand/favicon?v="));
+    assert!(
+        !page.contains("powered by"),
+        "unchecked box hides the credit"
+    );
+    let start = page
+        .find("/brand/custom.css?v=")
+        .expect("custom stylesheet linked");
+    let href: String = page[start..].chars().take_while(|c| *c != '"').collect();
+    let sheet = anon.get(&href).await;
+    assert_eq!(
+        sheet.headers.get("content-type").unwrap(),
+        "text/css; charset=utf-8"
+    );
+    assert_eq!(
+        sheet.body, ":root[data-theme=\"dark\"] {\n  --bg: #000;\n}",
+        "textarea CRLF is stored as LF, like a Terraform file"
+    );
+    let settings = c.get("/admin/settings").await.body;
+    assert!(settings.contains("--bg: #000;"));
+    assert!(
+        !settings.contains("/brand/custom.css"),
+        "the settings page stays usable whatever the CSS does"
+    );
+    assert!(c.get("/admin").await.body.contains("/brand/custom.css"));
+
+    assert_eq!(
+        c.post(
+            "/admin/branding/appearance",
+            &[("csrf", &csrf), ("default_theme", "neon")],
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+    c.post(
+        "/admin/branding/appearance",
+        &[
+            ("csrf", &csrf),
+            ("default_theme", "system"),
+            ("show_powered_by", "on"),
+        ],
+    )
+    .await;
+    c.post("/admin/branding/favicon/delete", &[("csrf", &csrf)])
+        .await;
+    assert_eq!(
+        anon.get("/brand/custom.css").await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        anon.get("/brand/favicon").await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert!(anon.get("/").await.body.contains("powered by"));
+}
+
+#[tokio::test]
 async fn stale_session_cookie_is_not_treated_as_signed_in() {
     let app = app(config(&[])).await;
     let mut c = Client::new(anpi::web::router(app.state.clone()));

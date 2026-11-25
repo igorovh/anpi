@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-default-theme="{{ layout.default_theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ layout.title }} · {{ layout.site_name }}</title>
-  {% if let Some(logo) = layout.logo_url %}<link rel="icon" href="{{ logo }}">{% else %}<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">{% endif %}
+  {% if let Some(icon) = layout.favicon_url %}<link rel="icon" href="{{ icon }}">{% else if let Some(logo) = layout.logo_url %}<link rel="icon" href="{{ logo }}">{% else %}<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">{% endif %}
   <script src="/static/theme.js?v={{ layout.asset_version }}"></script>
   <link rel="stylesheet" href="/static/app.css?v={{ layout.asset_version }}">
+  {% if let Some(css) = layout.custom_css_url %}<link rel="stylesheet" href="{{ css }}">{% endif %}
   <script src="/static/app.js?v={{ layout.asset_version }}" defer></script>
 </head>
 <body{% block body_attrs %}{% endblock %}>
@@ -52,7 +53,7 @@
   </main>
 
   <footer class="foot">
-    <a class="powered" href="https://github.com/igorovh/anpi" target="_blank" rel="noopener">powered by <span class="bird" aria-hidden="true">&gt;^&lt;</span> <strong>anpi</strong></a>
+    {% if layout.show_powered_by %}<a class="powered" href="https://github.com/igorovh/anpi" target="_blank" rel="noopener">powered by <span class="bird" aria-hidden="true">&gt;^&lt;</span> <strong>anpi</strong></a>{% endif %}
   </footer>
 </div>
 </body>

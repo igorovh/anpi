@@ -2,14 +2,19 @@ use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::Form;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 
 use super::auth_routes::CsrfForm;
 use super::{AppError, AppResult, AppState, CurrentUser};
-use crate::app::LOGO_KEY;
+use crate::app::{CSS_KEY, FAVICON_KEY, LOGO_KEY, THEMES};
+use crate::db::Db;
 use crate::store;
 
 pub const MAX_LOGO_BYTES: usize = 512 * 1024;
+pub const MAX_CSS_BYTES: usize = 512 * 1024;
+const CSS_TYPE: &str = "text/css; charset=utf-8";
 
 /// Detects the image type from its bytes; the browser-supplied type is not trusted.
 pub fn sniff_image(data: &[u8]) -> Option<&'static str> {
@@ -36,8 +41,91 @@ pub fn sniff_image(data: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// Base64 image from the API or a backup, checked the same way as an upload.
+pub fn decode_image(b64: &str) -> Result<(&'static str, Vec<u8>), String> {
+    let data = STANDARD
+        .decode(b64.split_whitespace().collect::<String>())
+        .map_err(|_| "Image must be base64 encoded".to_string())?;
+    check_image(&data)
+}
+
+fn check_image(data: &[u8]) -> Result<(&'static str, Vec<u8>), String> {
+    if data.is_empty() {
+        return Err("Image is empty".into());
+    }
+    if data.len() > MAX_LOGO_BYTES {
+        return Err("Image is too large (max 512 KB)".into());
+    }
+    let content_type = sniff_image(data).ok_or("Use a PNG, JPEG, WebP, GIF, ICO or SVG image")?;
+    Ok((content_type, data.to_vec()))
+}
+
+pub fn validate_theme(theme: &str) -> Result<String, String> {
+    let t = theme.trim();
+    if THEMES.contains(&t) {
+        Ok(t.to_string())
+    } else {
+        Err("Default theme must be system, light or dark".into())
+    }
+}
+
+/// Browsers send textarea line breaks as CRLF; storing LF keeps panel saves and Terraform files equal.
+pub fn normalize_text(s: &str) -> String {
+    s.replace("\r\n", "\n").trim().to_string()
+}
+
+pub fn validate_css(css: &str) -> Result<String, String> {
+    if css.len() > MAX_CSS_BYTES {
+        return Err("Custom CSS is too large (max 512 KB)".into());
+    }
+    Ok(normalize_text(css))
+}
+
+/// Stores the stylesheet, or removes it when it is empty.
+pub async fn save_css(db: &Db, css: &str) -> sqlx::Result<()> {
+    if css.is_empty() {
+        store::assets::delete(db, CSS_KEY).await
+    } else {
+        store::assets::replace(db, CSS_KEY, CSS_TYPE, css.as_bytes()).await
+    }
+}
+
+/// Stores an image, or removes it when there is none.
+pub async fn save_image(db: &Db, key: &str, image: Option<(&str, Vec<u8>)>) -> sqlx::Result<()> {
+    match image {
+        Some((content_type, data)) => store::assets::replace(db, key, content_type, &data).await,
+        None => store::assets::delete(db, key).await,
+    }
+}
+
+pub async fn save_appearance_settings(
+    db: &Db,
+    default_theme: &str,
+    show_powered_by: bool,
+) -> sqlx::Result<()> {
+    store::settings::set(db, "default_theme", default_theme).await?;
+    store::settings::set(
+        db,
+        "show_powered_by",
+        if show_powered_by { "1" } else { "0" },
+    )
+    .await
+}
+
 pub async fn logo(State(st): State<AppState>) -> AppResult<Response> {
-    let asset = store::assets::get(st.db(), LOGO_KEY)
+    serve_asset(&st, LOGO_KEY).await
+}
+
+pub async fn favicon(State(st): State<AppState>) -> AppResult<Response> {
+    serve_asset(&st, FAVICON_KEY).await
+}
+
+pub async fn custom_css(State(st): State<AppState>) -> AppResult<Response> {
+    serve_asset(&st, CSS_KEY).await
+}
+
+async fn serve_asset(st: &AppState, key: &str) -> AppResult<Response> {
+    let asset = store::assets::get(st.db(), key)
         .await?
         .ok_or_else(AppError::not_found)?;
     let content_type = HeaderValue::from_str(&asset.content_type)
@@ -90,7 +178,24 @@ pub async fn save_site_name(
 pub async fn upload_logo(
     State(st): State<AppState>,
     user: CurrentUser,
+    form: Multipart,
+) -> AppResult<Response> {
+    upload_image(&st, &user, form, LOGO_KEY).await
+}
+
+pub async fn upload_favicon(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    form: Multipart,
+) -> AppResult<Response> {
+    upload_image(&st, &user, form, FAVICON_KEY).await
+}
+
+async fn upload_image(
+    st: &AppState,
+    user: &CurrentUser,
     mut form: Multipart,
+    key: &str,
 ) -> AppResult<Response> {
     let mut csrf = String::new();
     let mut data: Option<Vec<u8>> = None;
@@ -106,12 +211,13 @@ pub async fn upload_logo(
                     .await
                     .map_err(|e| AppError::bad_request(e.to_string()))?
             }
-            Some("logo") => {
+            // Asset keys double as the form field names.
+            Some(name) if name == key => {
                 data = Some(
                     field
                         .bytes()
                         .await
-                        .map_err(|_| AppError::bad_request("Logo is too large (max 512 KB)"))?
+                        .map_err(|_| AppError::bad_request("Image is too large (max 512 KB)"))?
                         .to_vec(),
                 )
             }
@@ -122,12 +228,8 @@ pub async fn upload_logo(
     let data = data
         .filter(|d| !d.is_empty())
         .ok_or_else(|| AppError::bad_request("Choose an image file"))?;
-    if data.len() > MAX_LOGO_BYTES {
-        return Err(AppError::bad_request("Logo is too large (max 512 KB)"));
-    }
-    let content_type = sniff_image(&data)
-        .ok_or_else(|| AppError::bad_request("Use a PNG, JPEG, WebP, GIF, ICO or SVG image"))?;
-    store::assets::put(st.db(), LOGO_KEY, content_type, &data).await?;
+    let image = check_image(&data).map_err(AppError::bad_request)?;
+    save_image(st.db(), key, Some(image)).await?;
     st.ctx.reload_branding().await?;
     Ok(Redirect::to("/admin/settings?notice=saved").into_response())
 }
@@ -137,10 +239,50 @@ pub async fn delete_logo(
     user: CurrentUser,
     Form(f): Form<CsrfForm>,
 ) -> AppResult<Response> {
-    user.check_csrf(&f.csrf)?;
-    store::assets::delete(st.db(), LOGO_KEY).await?;
+    delete_image(&st, &user, &f.csrf, LOGO_KEY).await
+}
+
+pub async fn delete_favicon(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<CsrfForm>,
+) -> AppResult<Response> {
+    delete_image(&st, &user, &f.csrf, FAVICON_KEY).await
+}
+
+async fn delete_image(
+    st: &AppState,
+    user: &CurrentUser,
+    csrf: &str,
+    key: &str,
+) -> AppResult<Response> {
+    user.check_csrf(csrf)?;
+    store::assets::delete(st.db(), key).await?;
     st.ctx.reload_branding().await?;
     Ok(Redirect::to("/admin/settings?notice=deleted").into_response())
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct AppearanceForm {
+    csrf: String,
+    default_theme: String,
+    show_powered_by: Option<String>,
+    custom_css: String,
+}
+
+pub async fn save_appearance(
+    State(st): State<AppState>,
+    user: CurrentUser,
+    Form(f): Form<AppearanceForm>,
+) -> AppResult<Response> {
+    user.check_csrf(&f.csrf)?;
+    let theme = validate_theme(&f.default_theme).map_err(AppError::bad_request)?;
+    let css = validate_css(&f.custom_css).map_err(AppError::bad_request)?;
+    save_appearance_settings(st.db(), &theme, f.show_powered_by.is_some()).await?;
+    save_css(st.db(), &css).await?;
+    st.ctx.reload_branding().await?;
+    Ok(Redirect::to("/admin/settings?notice=saved#appearance").into_response())
 }
 
 #[derive(Deserialize, Default)]
@@ -233,6 +375,19 @@ mod tests {
         assert_eq!(sniff_image(b"<html><script>alert(1)</script>"), None);
         assert_eq!(sniff_image(b"<?xml version='1.0'?><html/>"), None);
         assert_eq!(sniff_image(b"MZ\x90\x00"), None, "executables are rejected");
+    }
+
+    #[test]
+    fn base64_images_are_checked_like_uploads() {
+        let (ct, data) = decode_image("iVBORw0K\nGgo=").unwrap();
+        assert_eq!(
+            (ct, data.len()),
+            ("image/png", 8),
+            "line breaks are ignored"
+        );
+        assert!(decode_image("PGh0bWw+").is_err(), "<html> is not an image");
+        assert!(decode_image("").is_err());
+        assert!(validate_theme("dark").is_ok() && validate_theme("Dark").is_err());
     }
 
     #[test]

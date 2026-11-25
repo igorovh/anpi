@@ -189,6 +189,7 @@ pub struct GroupRow {
 struct SettingsPage {
     layout: Layout,
     s: AppSettings,
+    custom_css: String,
     sso_source: &'static str,
     sso_panel: PanelSso,
     sso_has_secret: bool,
@@ -310,9 +311,16 @@ async fn settings_page_with(
     let mut sso_panel = PanelSso::load(st.db()).await?;
     let sso_has_secret = !sso_panel.client_secret.is_empty();
     sso_panel.client_secret.clear();
+    let mut layout = Layout::admin("Settings", user, "settings").with_notice(notice);
+    // Broken custom CSS must never hide the form that fixes it.
+    layout.custom_css_url = None;
     let page = SettingsPage {
-        layout: Layout::admin("Settings", user, "settings").with_notice(notice),
+        layout,
         s,
+        custom_css: store::assets::get(st.db(), crate::app::CSS_KEY)
+            .await?
+            .map(|a| String::from_utf8_lossy(&a.data).into_owned())
+            .unwrap_or_default(),
         sso_source: match auth.source {
             SsoSource::Env => "env",
             SsoSource::Panel => "panel",
@@ -584,7 +592,10 @@ impl SettingsForm {
         }
         Ok(AppSettings {
             status_title: title.chars().take(100).collect(),
-            status_description: self.status_description.trim().chars().take(1000).collect(),
+            status_description: super::branding::normalize_text(&self.status_description)
+                .chars()
+                .take(1000)
+                .collect(),
             raw_retention_hours: num(&self.raw_retention_hours, "Raw history", 1, 24 * 90)?,
             hourly_retention_days: num(&self.hourly_retention_days, "Hourly history", 1, 3650)?,
             incident_retention_days: num(

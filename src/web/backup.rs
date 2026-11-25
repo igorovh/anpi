@@ -7,8 +7,11 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use super::admin::MonitorForm;
-use super::branding::{MAX_LOGO_BYTES, sniff_image, validate_site_name};
-use crate::app::LOGO_KEY;
+use super::branding::{
+    decode_image, save_appearance_settings, save_css, save_image, validate_css, validate_site_name,
+    validate_theme,
+};
+use crate::app::{CSS_KEY, FAVICON_KEY, LOGO_KEY};
 use crate::auth::sso::PanelSso;
 use crate::db::Db;
 use crate::models::{Monitor, MonitorKind};
@@ -34,7 +37,9 @@ pub struct Backup {
     pub exported_at: String,
     pub version: String,
     pub settings: Option<BackupSettings>,
-    pub logo: Option<BackupLogo>,
+    pub logo: Option<BackupImage>,
+    pub favicon: Option<BackupImage>,
+    pub appearance: Option<BackupAppearance>,
     pub sso: Option<BackupSso>,
     pub groups: Vec<BackupGroup>,
     pub channels: Vec<BackupChannel>,
@@ -56,9 +61,17 @@ pub struct BackupSettings {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct BackupLogo {
+pub struct BackupImage {
     pub content_type: String,
     pub data: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupAppearance {
+    pub default_theme: String,
+    pub show_powered_by: Option<bool>,
+    pub custom_css: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -176,11 +189,21 @@ fn to_backup_monitor(m: &Monitor, channels: Vec<String>) -> BackupMonitor {
 
 pub async fn export(db: &Db) -> anyhow::Result<Backup> {
     let s = AppSettings::load(db).await?;
-    let site_name = crate::app::Branding::load(db).await?.site_name;
-    let logo = store::assets::get(db, LOGO_KEY).await?.map(|a| BackupLogo {
+    let brand = crate::app::Branding::load(db).await?;
+    let image = |a: store::assets::Asset| BackupImage {
         content_type: a.content_type,
         data: STANDARD.encode(a.data),
-    });
+    };
+    let logo = store::assets::get(db, LOGO_KEY).await?.map(image);
+    let favicon = store::assets::get(db, FAVICON_KEY).await?.map(image);
+    let appearance = BackupAppearance {
+        default_theme: brand.default_theme,
+        show_powered_by: Some(brand.show_powered_by),
+        custom_css: store::assets::get(db, CSS_KEY)
+            .await?
+            .map(|a| String::from_utf8_lossy(&a.data).into_owned())
+            .unwrap_or_default(),
+    };
     let sso = PanelSso::load(db).await?;
     let groups = store::groups::list(db)
         .await?
@@ -228,7 +251,7 @@ pub async fn export(db: &Db) -> anyhow::Result<Backup> {
         exported_at: crate::util::format_ts(now_ms()),
         version: env!("CARGO_PKG_VERSION").into(),
         settings: Some(BackupSettings {
-            site_name,
+            site_name: brand.site_name,
             status_title: s.status_title,
             status_description: s.status_description,
             raw_retention_hours: s.raw_retention_hours,
@@ -237,6 +260,8 @@ pub async fn export(db: &Db) -> anyhow::Result<Backup> {
             incidents_shown: s.incidents_shown,
         }),
         logo,
+        favicon,
+        appearance: Some(appearance),
         sso: Some(BackupSso {
             enabled: sso.enabled,
             base_url: sso.base_url,
@@ -377,21 +402,25 @@ pub async fn import(db: &Db, json: &str, replace: bool) -> Result<ImportReport, 
         }
     }
 
-    if let Some(logo) = &b.logo {
-        match STANDARD.decode(logo.data.trim()) {
-            Ok(data) if data.len() <= MAX_LOGO_BYTES => match sniff_image(&data) {
-                Some(ct) => {
-                    store::assets::put(db, LOGO_KEY, ct, &data)
-                        .await
-                        .map_err(err)?;
-                }
-                None => report
-                    .warnings
-                    .push("logo skipped: not a supported image".into()),
-            },
-            _ => report
-                .warnings
-                .push("logo skipped: invalid or larger than 512 KB".into()),
+    for (name, key, image) in [
+        ("logo", LOGO_KEY, &b.logo),
+        ("favicon", FAVICON_KEY, &b.favicon),
+    ] {
+        let Some(image) = image else { continue };
+        match decode_image(&image.data) {
+            Ok(img) => save_image(db, key, Some(img)).await.map_err(err)?,
+            Err(e) => report.warnings.push(format!("{name} skipped: {e}")),
+        }
+    }
+
+    if let Some(a) = &b.appearance {
+        let theme = validate_theme(&a.default_theme).unwrap_or_else(|_| "system".into());
+        save_appearance_settings(db, &theme, a.show_powered_by.unwrap_or(true))
+            .await
+            .map_err(err)?;
+        match validate_css(&a.custom_css) {
+            Ok(css) => save_css(db, &css).await.map_err(err)?,
+            Err(e) => report.warnings.push(format!("custom CSS skipped: {e}")),
         }
     }
 
@@ -685,6 +714,47 @@ mod tests {
         assert_eq!(
             AppSettings::load(&dst).await.unwrap().status_title,
             "Example status"
+        );
+    }
+
+    #[tokio::test]
+    async fn branding_survives_export_and_old_backups_leave_it_alone() {
+        use crate::app::Branding;
+        let png = b"\x89PNG\r\n\x1a\nfav";
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+        let src = crate::db::open_memory().await.unwrap();
+        store::assets::put(&src, LOGO_KEY, "image/svg+xml", svg)
+            .await
+            .unwrap();
+        store::assets::put(&src, FAVICON_KEY, "image/png", png)
+            .await
+            .unwrap();
+        save_appearance_settings(&src, "dark", false).await.unwrap();
+        save_css(&src, "body { color: red; }").await.unwrap();
+        let json = serde_json::to_string(&export(&src).await.unwrap()).unwrap();
+
+        let dst = crate::db::open_memory().await.unwrap();
+        let r = import(&dst, &json, false).await.unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        let b = Branding::load(&dst).await.unwrap();
+        assert_eq!(
+            (b.default_theme.as_str(), b.show_powered_by),
+            ("dark", false)
+        );
+        let db = &dst;
+        let data = |key| async move { store::assets::get(db, key).await.unwrap().unwrap().data };
+        assert_eq!(data(LOGO_KEY).await, svg);
+        assert_eq!(data(FAVICON_KEY).await, png);
+        assert_eq!(data(CSS_KEY).await, b"body { color: red; }");
+
+        let before = Branding::load(&dst).await.unwrap();
+        import(&dst, &format!(r#"{{"anpi_export": {FORMAT}}}"#), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            Branding::load(&dst).await.unwrap(),
+            before,
+            "a backup from 0.4 without appearance or favicon changes nothing"
         );
     }
 

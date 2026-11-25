@@ -65,6 +65,89 @@ async fn requests_need_a_valid_token_and_revoking_it_locks_the_api() {
 }
 
 #[tokio::test]
+async fn branding_is_replaced_as_a_whole_and_reset_by_delete() {
+    use base64::Engine;
+    let app = app(config(&[])).await;
+    let (_, token) = anpi::store::api_tokens::create(&app.ctx.db, "tf")
+        .await
+        .unwrap();
+    let mut c = Client::new(anpi::web::router(app.state.clone()));
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+    let logo = base64::engine::general_purpose::STANDARD.encode(svg);
+
+    let (s, out) = c
+        .api(
+            "PUT",
+            "/api/v1/branding",
+            &token,
+            Some(json!({
+                "site_name": "ACME",
+                "status_title": "ACME status",
+                "default_theme": "dark",
+                "show_powered_by": false,
+                "custom_css": "body { color: red; }",
+                "logo": logo,
+            })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{out}");
+    assert_eq!(out["logo"], logo, "images round-trip byte for byte");
+    assert_eq!(out["favicon"], serde_json::Value::Null);
+    assert_eq!(out["status_description"], "");
+    let (_, got) = c.api("GET", "/api/v1/branding", &token, None).await;
+    assert_eq!(got, out);
+
+    let page = c.get("/").await.body;
+    let mut again = got.clone();
+    again["status_description"] = serde_json::Value::Null;
+    let (s, _) = c.api("PUT", "/api/v1/branding", &token, Some(again)).await;
+    assert_eq!(s, StatusCode::OK, "null means default for every field");
+    let asset_urls = |html: &str| -> Vec<String> {
+        html.split('"')
+            .filter(|s| s.starts_with("/brand/"))
+            .map(String::from)
+            .collect()
+    };
+    assert_eq!(
+        asset_urls(&c.get("/").await.body),
+        asset_urls(&page),
+        "an unchanged apply keeps cached files valid"
+    );
+    assert!(page.contains("<title>ACME status · ACME</title>"));
+    assert!(page.contains("data-default-theme=\"dark\"") && page.contains("/brand/custom.css?v="));
+    assert!(!page.contains("powered by"));
+
+    for bad in [
+        json!({ "default_theme": "neon" }),
+        json!({ "site_name": "" }),
+        json!({ "logo": "bm90IGFuIGltYWdl" }),
+        json!({ "logo": "%%%" }),
+        json!({ "colour": "red" }),
+    ] {
+        let (s, body) = c
+            .api("PUT", "/api/v1/branding", &token, Some(bad.clone()))
+            .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad} -> {body}");
+    }
+    let (_, unchanged) = c.api("GET", "/api/v1/branding", &token, None).await;
+    assert_eq!(unchanged, out, "a rejected PUT changes nothing");
+
+    assert_eq!(
+        c.api("DELETE", "/api/v1/branding", &token, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let (_, reset) = c.api("GET", "/api/v1/branding", &token, None).await;
+    assert_eq!(reset["site_name"], "anpi");
+    assert_eq!(reset["default_theme"], "system");
+    assert_eq!(reset["show_powered_by"], true);
+    assert_eq!(reset["logo"], serde_json::Value::Null);
+    assert_eq!(
+        c.get("/brand/custom.css").await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn sso_requires_explicit_permission_and_rejects_unreachable_provider() {
     let app = app(config(&[])).await;
     let (_, ordinary) = anpi::store::api_tokens::create(&app.ctx.db, "ordinary")

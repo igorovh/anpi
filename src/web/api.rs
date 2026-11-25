@@ -100,6 +100,15 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/info", get(info))
         .route("/sso", get(get_sso).put(put_sso).delete(delete_sso))
+        .route(
+            "/branding",
+            get(get_branding)
+                .put(put_branding)
+                .delete(delete_branding)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    8 * super::branding::MAX_LOGO_BYTES,
+                )),
+        )
         .route("/monitors", get(list_monitors).post(create_monitor))
         .route(
             "/monitors/{id}",
@@ -206,6 +215,117 @@ async fn delete_sso(State(st): State<AppState>, ApiAuth(token): ApiAuth) -> ApiR
     }
     crate::auth::sso::disable(st.db()).await?;
     st.ctx.reload_auth().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---- Branding ----
+
+/// Everything the panel's Branding and Appearance sections set; left-out fields reset to defaults.
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct BrandingBody {
+    site_name: Option<String>,
+    status_title: Option<String>,
+    status_description: Option<String>,
+    default_theme: Option<String>,
+    show_powered_by: Option<bool>,
+    custom_css: Option<String>,
+    /// Base64 image; null or left out removes it.
+    logo: Option<String>,
+    favicon: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct BrandingOut {
+    site_name: String,
+    status_title: String,
+    status_description: String,
+    default_theme: String,
+    show_powered_by: bool,
+    custom_css: String,
+    logo: Option<String>,
+    favicon: Option<String>,
+}
+
+async fn asset_b64(st: &AppState, key: &str) -> ApiResult<Option<String>> {
+    use base64::Engine;
+    Ok(store::assets::get(st.db(), key)
+        .await?
+        .map(|a| base64::engine::general_purpose::STANDARD.encode(a.data)))
+}
+
+async fn get_branding(State(st): State<AppState>, _: ApiAuth) -> ApiResult<Json<BrandingOut>> {
+    let b = crate::app::Branding::load(st.db()).await?;
+    let s = store::settings::AppSettings::load(st.db()).await?;
+    let custom_css = store::assets::get(st.db(), crate::app::CSS_KEY)
+        .await?
+        .map(|a| String::from_utf8_lossy(&a.data).into_owned())
+        .unwrap_or_default();
+    Ok(Json(BrandingOut {
+        site_name: b.site_name,
+        status_title: s.status_title,
+        status_description: s.status_description,
+        default_theme: b.default_theme,
+        show_powered_by: b.show_powered_by,
+        custom_css,
+        logo: asset_b64(&st, crate::app::LOGO_KEY).await?,
+        favicon: asset_b64(&st, crate::app::FAVICON_KEY).await?,
+    }))
+}
+
+async fn put_branding(
+    State(st): State<AppState>,
+    auth: ApiAuth,
+    payload: Result<Json<BrandingBody>, JsonRejection>,
+) -> ApiResult<Json<BrandingOut>> {
+    use super::branding as br;
+    let b = body(payload)?;
+    let d = crate::app::Branding::default();
+    let site_name = br::validate_site_name(b.site_name.as_deref().unwrap_or(&d.site_name))
+        .map_err(ApiError::bad_request)?;
+    let mut settings = store::settings::AppSettings::load(st.db()).await?;
+    let title = match &b.status_title {
+        Some(t) => t.trim().to_string(),
+        None => store::settings::AppSettings::default().status_title,
+    };
+    if title.is_empty() || title.chars().count() > 100 {
+        return Err(ApiError::bad_request(
+            "status_title is required (up to 100 characters)",
+        ));
+    }
+    let description = br::normalize_text(b.status_description.as_deref().unwrap_or_default());
+    if description.chars().count() > 1000 {
+        return Err(ApiError::bad_request(
+            "status_description is up to 1000 characters",
+        ));
+    }
+    let theme = br::validate_theme(b.default_theme.as_deref().unwrap_or(&d.default_theme))
+        .map_err(ApiError::bad_request)?;
+    let css = br::validate_css(b.custom_css.as_deref().unwrap_or_default())
+        .map_err(ApiError::bad_request)?;
+    let image = |v: &Option<String>, field: &str| {
+        v.as_deref()
+            .map(br::decode_image)
+            .transpose()
+            .map_err(|e| ApiError::bad_request(format!("{field}: {e}")))
+    };
+    let logo = image(&b.logo, "logo")?;
+    let favicon = image(&b.favicon, "favicon")?;
+
+    store::settings::set(st.db(), "site_name", &site_name).await?;
+    settings.status_title = title;
+    settings.status_description = description;
+    settings.save(st.db()).await?;
+    br::save_appearance_settings(st.db(), &theme, b.show_powered_by.unwrap_or(true)).await?;
+    br::save_css(st.db(), &css).await?;
+    br::save_image(st.db(), crate::app::LOGO_KEY, logo).await?;
+    br::save_image(st.db(), crate::app::FAVICON_KEY, favicon).await?;
+    st.ctx.reload_branding().await?;
+    get_branding(State(st), auth).await
+}
+
+async fn delete_branding(State(st): State<AppState>, auth: ApiAuth) -> ApiResult<StatusCode> {
+    let _ = put_branding(State(st), auth, Ok(Json(BrandingBody::default()))).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

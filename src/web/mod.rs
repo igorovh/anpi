@@ -323,7 +323,7 @@ async fn healthz(State(st): State<AppState>) -> Response {
 }
 
 pub fn router(state: AppState) -> Router {
-    let csp = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; \
+    let csp = "default-src 'self'; img-src 'self' data:; font-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; \
                frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
     Router::new()
         .route("/", get(public::status_page))
@@ -396,10 +396,28 @@ pub fn router(state: AppState) -> Router {
             )),
         )
         .route("/admin/branding/logo/delete", post(branding::delete_logo))
+        .route(
+            "/admin/branding/favicon",
+            post(branding::upload_favicon).layer(axum::extract::DefaultBodyLimit::max(
+                branding::MAX_LOGO_BYTES + 64 * 1024,
+            )),
+        )
+        .route(
+            "/admin/branding/favicon/delete",
+            post(branding::delete_favicon),
+        )
+        .route(
+            "/admin/branding/appearance",
+            post(branding::save_appearance).layer(axum::extract::DefaultBodyLimit::max(
+                4 * branding::MAX_CSS_BYTES,
+            )),
+        )
         .route("/admin/groups", post(branding::create_group))
         .route("/admin/groups/{id}", post(branding::update_group))
         .route("/admin/groups/{id}/delete", post(branding::delete_group))
         .route("/brand/logo", get(branding::logo))
+        .route("/brand/favicon", get(branding::favicon))
+        .route("/brand/custom.css", get(branding::custom_css))
         .route("/admin/users/{id}/delete", post(settings::delete_user))
         .route("/admin/api-tokens", post(settings::create_api_token))
         .route(

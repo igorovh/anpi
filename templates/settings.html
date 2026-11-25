@@ -16,7 +16,7 @@
     <div class="logo-preview">{% if let Some(logo) = layout.logo_url %}<img src="{{ logo }}" alt="Current logo">{% else %}<span class="bird">&gt;^&lt;</span>{% endif %}</div>
     <form method="post" action="/admin/branding/logo" enctype="multipart/form-data" class="form grow">
       <input type="hidden" name="csrf" value="{{ layout.csrf }}">
-      <label>Logo<span class="hint">PNG, SVG, WebP, JPEG or ICO, up to 512 KB; also used as the favicon</span><input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg,image/gif,image/x-icon" required></label>
+      <label>Logo<span class="hint">PNG, SVG, WebP, JPEG or ICO, up to 512 KB; also the favicon unless one is set below</span><input type="file" name="logo" accept="image/png,image/svg+xml,image/webp,image/jpeg,image/gif,image/x-icon" required></label>
       <div class="form-actions">
         <button type="submit" class="btn">Upload</button>
       </div>
@@ -27,7 +27,39 @@
     </form>
     {% endif %}
   </div>
+  <div class="logo-row">
+    <div class="logo-preview">{% if let Some(icon) = layout.favicon_url %}<img src="{{ icon }}" alt="Current favicon">{% else %}<span class="muted">—</span>{% endif %}</div>
+    <form method="post" action="/admin/branding/favicon" enctype="multipart/form-data" class="form grow">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+      <label>Favicon<span class="hint">optional; same formats and size as the logo</span><input type="file" name="favicon" accept="image/png,image/svg+xml,image/webp,image/jpeg,image/gif,image/x-icon" required></label>
+      <div class="form-actions">
+        <button type="submit" class="btn">Upload</button>
+      </div>
+    </form>
+    {% if layout.favicon_url.is_some() %}
+    <form method="post" action="/admin/branding/favicon/delete" class="inline" data-confirm="Remove the favicon?">
+      <input type="hidden" name="csrf" value="{{ layout.csrf }}"><button class="btn small danger" type="submit">Remove favicon</button>
+    </form>
+    {% endif %}
+  </div>
 </section>
+
+<form method="post" action="/admin/branding/appearance" class="form card fade" id="appearance">
+  <h3>Appearance</h3>
+  <input type="hidden" name="csrf" value="{{ layout.csrf }}">
+  <div class="row">
+    <label class="grow">Default theme<span class="hint">visitors can still switch; their choice is remembered</span>
+      <select name="default_theme">
+        <option value="system"{% if layout.default_theme == "system" %} selected{% endif %}>Follow the system</option>
+        <option value="light"{% if layout.default_theme == "light" %} selected{% endif %}>Light</option>
+        <option value="dark"{% if layout.default_theme == "dark" %} selected{% endif %}>Dark</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" name="show_powered_by"{% if layout.show_powered_by %} checked{% endif %}> Show “powered by anpi” in the footer</label>
+  </div>
+  <label>Custom CSS<span class="hint">loaded after the built-in styles on every page, up to 512 KB; override variables such as <code>--bg</code>, <code>--ink</code> or <code>--up</code> under <code>:root[data-theme="dark"]</code> and <code>:root[data-theme="light"]</code>. Images and fonts must be <code>data:</code> URLs or files on this site. This page never loads it, so a broken stylesheet can always be fixed here.</span><textarea name="custom_css" rows="10" spellcheck="false">{{ custom_css }}</textarea></label>
+  <div class="form-actions"><button type="submit" class="btn">Save appearance</button></div>
+</form>
 
 <section class="card fade" id="groups">
   <h3>Groups</h3>

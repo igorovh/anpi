@@ -38,7 +38,7 @@ PKCE is always used. The ID token's issuer, audience, expiry and nonce are check
 
 ## Backup and moving servers
 
-**Settings → Backup → Export configuration** downloads one JSON file. It contains monitors with their sub-monitors, groups, notification channels, maintenance windows, settings, the logo and SSO settings. Check history and user accounts are left out. The file holds webhook URLs, passwords and secrets, so keep it private.
+**Settings → Backup → Export configuration** downloads one JSON file. It contains monitors with their sub-monitors, groups, notification channels, maintenance windows, settings, the logo, favicon, appearance (theme, footer, custom CSS) and SSO settings. Check history and user accounts are left out. The file holds webhook URLs, passwords and secrets, so keep it private.
 
 **Import** restores that file:
 - *Add* keeps what is already there and reuses groups and channels with the same name.

@@ -42,6 +42,17 @@ pub async fn put(db: &Db, key: &str, content_type: &str, data: &[u8]) -> sqlx::R
     Ok(now)
 }
 
+/// Like `put`, but keeps `updated_at`, and so cached copies, when nothing changed.
+pub async fn replace(db: &Db, key: &str, content_type: &str, data: &[u8]) -> sqlx::Result<()> {
+    let same = get(db, key)
+        .await?
+        .is_some_and(|a| a.content_type == content_type && a.data == data);
+    if !same {
+        put(db, key, content_type, data).await?;
+    }
+    Ok(())
+}
+
 pub async fn delete(db: &Db, key: &str) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM assets WHERE key = ?")
         .bind(key)

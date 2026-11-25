@@ -50,7 +50,7 @@ An incident opens when a monitor is marked down and closes when it comes back. T
 
 ## Status page and API
 
-`/` lists public monitors by group, with 30-day uptime bars, live updates and recent incidents. Each monitor can have a public name, so internal names stay private. Set the site name and logo under **Settings → Branding**; the logo is also used as the favicon.
+`/` lists public monitors by group, with 30-day uptime bars, live updates and recent incidents. Each monitor can have a public name, so internal names stay private. Set the site name, logo and favicon under **Settings → Branding**; without a favicon the logo is used. **Settings → Appearance** sets the default theme, hides the footer credit and adds custom CSS. The same settings can be managed through the [API and Terraform](api.md#branding).
 
 `GET /api/status.json` returns the same data for other tools:
 

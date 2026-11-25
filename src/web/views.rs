@@ -8,6 +8,10 @@ pub struct Layout {
     pub title: String,
     pub site_name: String,
     pub logo_url: Option<String>,
+    pub favicon_url: Option<String>,
+    pub custom_css_url: Option<String>,
+    pub default_theme: String,
+    pub show_powered_by: bool,
     pub user: Option<String>,
     pub signed_in: bool,
     pub csrf: String,
@@ -23,6 +27,14 @@ impl Layout {
             title: title.into(),
             site_name: brand.site_name.clone(),
             logo_url: brand.logo_version.map(|v| format!("/brand/logo?v={v}")),
+            favicon_url: brand
+                .favicon_version
+                .map(|v| format!("/brand/favicon?v={v}")),
+            custom_css_url: brand
+                .css_version
+                .map(|v| format!("/brand/custom.css?v={v}")),
+            default_theme: brand.default_theme.clone(),
+            show_powered_by: brand.show_powered_by,
             user: None,
             signed_in: false,
             csrf: String::new(),

@@ -2,7 +2,7 @@
 
 [← Back to the README](../README.md)
 
-anpi has a JSON API under `/api/v1` for monitors, groups, notification channels and maintenance windows. The [Terraform provider](#terraform) uses it, and scripts can too. The public, read-only [`/api/status.json`](monitoring.md#status-page-and-api) needs no token.
+anpi has a JSON API under `/api/v1` for monitors, groups, notification channels, maintenance windows, SSO and branding. The [Terraform provider](#terraform) uses it, and scripts can too. The public, read-only [`/api/status.json`](monitoring.md#status-page-and-api) needs no token.
 
 ## Tokens
 
@@ -54,7 +54,7 @@ resource "anpi_monitor" "api" {
 }
 ```
 
-It manages `anpi_monitor`, `anpi_group`, `anpi_notification_channel` and `anpi_maintenance`; existing objects can be imported by the ID in the panel URL. Changes made in the panel show up as drift in the next plan. See the provider's README for every argument.
+It manages `anpi_monitor`, `anpi_group`, `anpi_notification_channel`, `anpi_maintenance`, `anpi_sso` and `anpi_branding`; existing objects can be imported by the ID in the panel URL. Changes made in the panel show up as drift in the next plan. See the provider's README for every argument.
 
 ## Conventions
 
@@ -74,6 +74,7 @@ It manages `anpi_monitor`, `anpi_group`, `anpi_notification_channel` and `anpi_m
 | `GET`, `PUT`, `DELETE` | `/api/v1/notification-channels/{id}` | |
 | `GET`, `POST` | `/api/v1/maintenances` | |
 | `GET`, `PUT`, `DELETE` | `/api/v1/maintenances/{id}` | |
+| `GET`, `PUT`, `DELETE` | `/api/v1/branding` | read, replace, reset to defaults |
 
 ## Monitors
 
@@ -145,3 +146,27 @@ Some settings a kind does not use are reset: `port` outside `tcp` comes back as 
 ```
 
 Times are RFC 3339 and come back in UTC (`2030-05-01T22:00:00Z`). `ends_at` must be after `starts_at`, and either `all_monitors` is `true` or `monitor_ids` lists at least one monitor.
+
+## Branding
+
+One object for the whole look of the panel and the status page:
+
+```json
+{ "site_name": "ACME", "status_title": "ACME status", "status_description": "", "default_theme": "system", "show_powered_by": true, "custom_css": ":root[data-theme=\"dark\"] { --bg: #0b1020; }", "logo": "PHN2ZyB4bWxucz0i…", "favicon": null }
+```
+
+| Field | Default | |
+| --- | --- | --- |
+| `site_name` | `anpi` | up to 40 characters; header, footer and browser tab |
+| `status_title` | `Service status` | up to 100 characters |
+| `status_description` | `""` | up to 1000 characters |
+| `default_theme` | `system` | `system`, `light` or `dark`; a visitor's own choice still wins |
+| `show_powered_by` | `true` | the footer credit |
+| `custom_css` | `""` | up to 512 KB, loaded after the built-in stylesheet on every page |
+| `logo`, `favicon` | `null` | base64 PNG, JPEG, WebP, GIF, ICO or SVG, up to 512 KB each; without a favicon the logo is used |
+
+`PUT` replaces everything: a field left out or `null` goes back to its default, so `null` removes an image. Text fields are trimmed and CRLF line breaks become LF. Images come back byte for byte as sent; unchanged images and CSS keep their URLs, so browser caches stay valid. `DELETE` resets all of it. Any token can use this endpoint.
+
+**Settings** never loads the custom CSS, so a stylesheet that breaks the layout can always be fixed or removed there.
+
+Custom CSS can override the colour variables in `static/app.css` (`--bg`, `--panel`, `--ink`, `--muted`, `--line`, `--up`, `--down`, …) under `:root[data-theme="dark"]` and `:root[data-theme="light"]`, or restyle any element. The page's Content Security Policy only allows images and fonts from this site or `data:` URLs, so embed fonts as `data:` URLs.
